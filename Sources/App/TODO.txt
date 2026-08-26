@@ -1,0 +1,71 @@
+[[Announcement]] [Key points]
+***
+No auto lyric/note load, as previously workings can be erased
+***
+
+8/24/2026
+1. Track note editor(not line note or annotation) should appear at the top of the lyric note editor. For its representation, it should appear under artist's name(which is under title's name). This also should also be affected by note button, that hides/shows every annotation and note.
+
+2-1. Note editor, multiple annotations for each line.
+2-2. Annotation for each letter.
+2-3. For non-timestamp lyrics, lyrics in note page for translation lyrics is recurring(not matching with original lyrics).
+2-4. When typing or clicking lyrics, no auto scrolling. When spacing(for syncing lyrics) yes I need.
+
+3. CustomSyncView. When representing translation lyrics, skip(empty string) (intl) or its symbol and (end)
+
+4. On track change, scroll up lyrics
+4-2. On track change, for lyrics not found(both lib and db), previous lyrics is not updated to "no lyrics found" and remains on lyrics page.
+
+5. Song info(and all other page except lyric main page) is not full size when only song info page was open.
+
+6.
+
+Future direction:
+    Lyric edit and Lyric note edit -> Too much lag, reduce it.
+        - If there is a way to fix it, use that one, but if does not work I just want straight text editor(like when I just open .txt file), and on save, timestamps for each saved lyric lines.
+    Main Lyric page, lyric change is not smooth enough, bit laggy as well.
+        - Is this best reactivity for clicking(changing) lyrics? Must consider your idea first, and idk this would work but try using this https://github.com/ungive/mediaremote-adapter.
+
+
+8/22/2026
+Translation Lyrics not shown.
+
+Custom sync page, buttons for adding lyrics to both original and translated lyrics and for only Translated language. Clicking this button would reload translation lyrics only, and edits made only affects translation lyrics.
+    -> In case of only having original lyrics and have to add translated lyrics.
+
+Let AI know that:
+- "* * *" is now changed to "♪"
+- Removed animation from lyrics hovering.
+//withAnimation(.easeInOut(duration: 0.15)) {
+    isHovered = hovering
+    //}
+
+On clicking main view side page buttons, new pages opening should have more space then now(existing page 65% page to open 35%)
+
+Other pages:
+
+song info page:
+    Custom wiki viewer
+        -> Requires word processor for NamuWiki raw text.
+            Info)Namuwiki uses its own custom markup language called Namumark, powered by the proprietary wiki engine known as The Seed -> Try using it, if fails then its kinda fucked up but try using wikitext
+
+    Full page of Wiki style page(since copied from namuwiki)
+        -> Buttons to edit which can be opening new window or page turning into editor(preferred, but can use other ways if there is performance issues)
+        -> Buttons to save after edit
+     
+lyrics note page(not mentioned before):
+    I want to take a note in lyrics. This includes any note and annotation in (current playing) lyrics(superscript), and its annotation displayed under translation lyrics with some space larger than original lyrics to translated lyrics. So this would have:
+        original lyrics
+        translatied lyrics
+        (some space)
+        annotation
+    
+    For the note, not annotation, no plans how to display, but having structure like sticky note beside original lyrics, connected by line(this part not necessary), could be one possible way.
+    
+    lyrics note page should be a text editor for annotations(superscript at any letter) and notes.
+    This also needs new button that is not a page button but a button for displaying notes, under translation button.
+    
+play history page:
+    Do it after all other tasks, and you may even skip. Overall plan is to directly get song history from spotify(if possible), and have analyzer for overall analysis and extra info for current song(if song playing, if not not displayed)
+    
+
