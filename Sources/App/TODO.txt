@@ -1,7 +1,25 @@
 [[Announcement]] [Key points]
 ***
 No auto lyric/note load, as previously workings can be erased
+
+Future direction:
+    Lyric edit and Lyric note edit -> Too much lag, reduce it.(working on)
+        - If there is a way to fix it, use that one, but if does not work I just want straight text editor(like when I just open .txt file), and on save, timestamps for each saved lyric lines.
+    Main Lyric page, lyric change is not smooth enough, bit laggy as well.
+        - Is this best reactivity for clicking(changing) lyrics? Must consider your idea first, and idk this would work but try using this https://github.com/ungive/mediaremote-adapter.
 ***
+
+8/26/2026
+
+1. Track note editor(not line note or annotation) should appear at the top of the lyric note editor. For its representation, it should appear under artist's name(which is under title's name). This also should also be affected by note button, that hides/shows every annotation and note.
+
+2. Note editor, multiple annotations for each letter.
+
+3. Song info(and all other page except lyric main page) is not full size when only song info page was open.
+
+4. Note editor page, limit window size until note box expands(window min size = text box ideal size(or max))
+
+[5.] Try developing prototype.
 
 8/24/2026
 1. Track note editor(not line note or annotation) should appear at the top of the lyric note editor. For its representation, it should appear under artist's name(which is under title's name). This also should also be affected by note button, that hides/shows every annotation and note.
@@ -11,7 +29,7 @@ No auto lyric/note load, as previously workings can be erased
 2-3. For non-timestamp lyrics, lyrics in note page for translation lyrics is recurring(not matching with original lyrics).
 2-4. When typing or clicking lyrics, no auto scrolling. When spacing(for syncing lyrics) yes I need.
 
-3. CustomSyncView. When representing translation lyrics, skip(empty string) (intl) or its symbol and (end)
+3. When representing translation lyrics, skip(empty string) (intl) or its symbol and (end)
 
 4. On track change, scroll up lyrics
 4-2. On track change, for lyrics not found(both lib and db), previous lyrics is not updated to "no lyrics found" and remains on lyrics page.

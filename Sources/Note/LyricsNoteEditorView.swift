@@ -1,17 +1,5 @@
 import SwiftUI
 
-/// The "lyrics note page": per-word annotations (shown as a superscript
-/// marker inline, with the note text listed as a footnote below) plus one
-/// free-form note per track. Layout per spec: original line, translated
-/// line, extra space, then annotation footnotes.
-///
-/// Word-level, not character-level: SwiftUI's Text has no per-character tap
-/// targets without a custom TextKit/AppKit view, which is a materially
-/// bigger lift than this. This gets you "annotate any word" today; if you
-/// want true "any letter" precision later, that's a custom NSTextView-backed
-/// editor -- happy to build that as a follow-up if word-level isn't enough.
-
-
 struct LyricsNoteEditorView: View {
     @EnvironmentObject var appState: AppState
     @State private var editingWord: (lineIndex: Int, wordIndex: Int)? = nil
@@ -76,9 +64,13 @@ struct LyricsNoteEditorView: View {
     }
 
     private func lineBlock(index: Int, line: LyricLine) -> some View {
-        let words = line.text.split(separator: " ").map(String.init)
+        let groups = lyricLetterGroups(for: line.text)
         let lineAnnotations = appState.annotationsByLine[index] ?? []
-        let translation = appState.translatedLines?.first(where: { $0.timeMs == line.timeMs })?.text
+        // Paired by position, not by timeMs -- timeMs is nil for custom
+        // untimed lines, and matching on nil == nil would wrongly pin every
+        // untimed line to the first untimed translation ("recurring").
+        let translated = appState.translatedLines
+        let translation = (translated != nil && index < translated!.count) ? translated![index].text : nil
 
         var displayNotes: [DisplayNote] = []
         var counter = 1
@@ -91,18 +83,33 @@ struct LyricsNoteEditorView: View {
             }
         }
 
+        // Negative indices are "general" line annotations added via the "+"
+        // button (not tied to a letter), so they get a neutral label instead
+        // of looking up a nonexistent character.
+        func label(for charIndex: Int) -> String {
+            if charIndex < 0 { return "Note" }
+            let chars = Array(line.text)
+            return chars.indices.contains(charIndex) ? String(chars[charIndex]) : "?"
+        }
+
         return HStack(alignment: .top, spacing: 20) {
             // LEFT COLUMN: Lyrics & Annotation Editors
             VStack(alignment: .leading, spacing: 6) {
-                WrapHStack(words.indices.map { $0 }, spacing: 4) { wordIndex in
-                    let noteObj = displayNotes.first(where: { $0.note.wordIndex == wordIndex })
-                    wordView(
-                        lineIndex: index,
-                        wordIndex: wordIndex,
-                        word: words[wordIndex],
-                        tag: noteObj?.tag,
-                        hasExisting: noteObj != nil
-                    )
+                FlowLayout(spacing: 6, lineSpacing: 8) {
+                    ForEach(groups.indices, id: \.self) { groupIndex in
+                        HStack(spacing: 0) {
+                            ForEach(groups[groupIndex]) { letter in
+                                let noteObj = displayNotes.first(where: { $0.note.wordIndex == letter.id })
+                                letterView(
+                                    lineIndex: index,
+                                    charIndex: letter.id,
+                                    char: String(letter.char),
+                                    tag: noteObj?.tag,
+                                    hasExisting: noteObj != nil
+                                )
+                            }
+                        }
+                    }
                 }
 
                 if let translation = translation, !translation.isEmpty {
@@ -112,14 +119,15 @@ struct LyricsNoteEditorView: View {
                         .padding(.top, 2)
                 }
 
-                // 1. EXIST BY DEFAULT: Editors for already-annotated words
+                // 1. EXIST BY DEFAULT: Editors for already-annotated letters,
+                // plus any free-standing "general" annotations for this line.
                 if !displayNotes.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(displayNotes) { item in
                             AnnotationEditorBox(
                                 lineIndex: index,
                                 wordIndex: item.note.wordIndex,
-                                word: words.indices.contains(item.note.wordIndex) ? words[item.note.wordIndex] : "?",
+                                word: label(for: item.note.wordIndex),
                                 initialMarker: item.note.marker ?? "",
                                 initialText: item.note.noteText
                             )
@@ -128,13 +136,28 @@ struct LyricsNoteEditorView: View {
                     .padding(.top, 8)
                 }
                 
-                // 2. NEW ANNOTATION: Appears only when an empty word is clicked
+                // 2. NEW ANNOTATION: Appears when an empty letter is clicked,
+                // or after tapping "Add annotation" below.
                 if let editing = editingWord, editing.lineIndex == index, !displayNotes.contains(where: { $0.note.wordIndex == editing.wordIndex }) {
-                    let currentWord = words.indices.contains(editing.wordIndex) ? words[editing.wordIndex] : "?"
-                    NewAnnotationEditorBox(lineIndex: index, wordIndex: editing.wordIndex, word: currentWord) {
+                    NewAnnotationEditorBox(lineIndex: index, wordIndex: editing.wordIndex, word: label(for: editing.wordIndex)) {
                         editingWord = nil
                     }
                 }
+
+                // A line isn't limited to one annotation per letter -- this
+                // opens another editor that isn't pinned to any letter,
+                // using a synthetic negative index so it never collides with
+                // a real character position (which are always >= 0).
+                Button {
+                    let lowestUsed = lineAnnotations.map { $0.wordIndex }.min() ?? 0
+                    editingWord = (index, min(0, lowestUsed) - 1)
+                } label: {
+                    Label("Add annotation", systemImage: "plus.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
 
@@ -147,131 +170,114 @@ struct LyricsNoteEditorView: View {
         }
     }
 
+    // A `Button` per letter (hundreds per screen now that annotation is
+    // letter-level) carries focus/hover/accessibility overhead that adds up.
+    // A plain tappable `Text` does the same job for a fraction of the cost.
     @ViewBuilder
-    private func wordView(lineIndex: Int, wordIndex: Int, word: String, tag: String?, hasExisting: Bool) -> some View {
-        Button(action: {
+    private func letterView(lineIndex: Int, charIndex: Int, char: String, tag: String?, hasExisting: Bool) -> some View {
+        HStack(spacing: 0) {
+            Text(char)
+                .font(.system(size: 18, weight: .medium))
+            
+            if let tag = tag {
+                Text(tag)
+                    .font(.system(size: 10, weight: .bold))
+                    .baselineOffset(8)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
             if hasExisting {
                 // Do nothing if clicked; the editor is already permanently visible below!
                 return
             }
-            
-            if editingWord?.lineIndex == lineIndex && editingWord?.wordIndex == wordIndex {
+
+            if editingWord?.lineIndex == lineIndex && editingWord?.wordIndex == charIndex {
                 editingWord = nil // Toggle off
             } else {
-                editingWord = (lineIndex, wordIndex) // Open new editor
-            }
-        }) {
-            HStack(spacing: 1) {
-                Text(word)
-                    .font(.system(size: 18, weight: .medium))
-                
-                if let tag = tag {
-                    Text(tag)
-                        .font(.system(size: 12, weight: .bold))
-                        .baselineOffset(8)
-                        .foregroundStyle(.orange)
-                }
+                editingWord = (lineIndex, charIndex) // Open new editor
             }
         }
-        .buttonStyle(.plain)
     }
 }
 
-/// Minimal wrapping-HStack helper (words wrap like text). This is the
-/// well-known GeometryReader/alignment-guide workaround for pre-Layout-
-/// protocol SwiftUI -- functional, but flag it if you see any jitter on
-/// resize; a macOS-14+ `Layout` conformance would be a cleaner long-term fix.
-struct WrapHStack<Content: View>: View {
-    let items: [Int]
-    let spacing: CGFloat
-    let content: (Int) -> Content
-
-    init(_ items: [Int], spacing: CGFloat = 4, @ViewBuilder content: @escaping (Int) -> Content) {
-        self.items = items
-        self.spacing = spacing
-        self.content = content
-    }
-
-    var body: some View {
-        FlexibleView(data: items, spacing: spacing, content: content)
-    }
+/// A single annotatable unit for the letter-level annotation UI: `id` is
+/// that character's index within the *full* line string, so it stays a
+/// stable, unique key even though letters are grouped visually by word.
+/// Not `private` -- `LyricLineView` in MusicExplorerApp.swift uses the same
+/// grouping so its inline superscripts line up with what you tagged here.
+struct LyricLetter: Identifiable {
+    let id: Int
+    let char: Character
 }
 
-struct FlexibleView<Data: BidirectionalCollection, Content: View>: View where Data.Element: Hashable {
-    let data: Data
-    let spacing: CGFloat
-    let content: (Data.Element) -> Content
-
-    @State private var totalHeight = CGFloat.zero
-
-    var body: some View {
-        VStack {
-            GeometryReader { geometry in
-                self.generateContent(in: geometry)
-            }
-        }
-        .frame(height: totalHeight)
-    }
-
-    private func generateContent(in geometry: GeometryProxy) -> some View {
-        let state = FlexibleLayoutState()
-        return ZStack(alignment: .topLeading) {
-            ForEach(Array(data), id: \.self) { item in
-                itemView(for: item, geometry: geometry, state: state)
-            }
-        }
-        .background(viewHeightReader($totalHeight))
-    }
-
-    @ViewBuilder
-    private func itemView(for item: Data.Element, geometry: GeometryProxy, state: FlexibleLayoutState) -> some View {
-        content(item)
-            .padding(.trailing, spacing)
-            .alignmentGuide(.leading) { d in
-                self.leadingGuide(d, item: item, geometry: geometry, state: state)
-            }
-            .alignmentGuide(.top) { d in
-                self.topGuide(d, item: item, state: state)
-            }
-    }
-
-    private func leadingGuide(
-        _ d: ViewDimensions, item: Data.Element, geometry: GeometryProxy, state: FlexibleLayoutState
-    ) -> CGFloat {
-        if abs(state.width - d.width) > geometry.size.width {
-            state.width = 0
-            state.height -= d.height + spacing
-        }
-        let result = state.width
-        if item == data.last {
-            state.width = 0
+/// Splits `text` into per-word groups of `LyricLetter`s (spaces separate
+/// groups but aren't themselves annotatable) while preserving each letter's
+/// global character index.
+func lyricLetterGroups(for text: String) -> [[LyricLetter]] {
+    var groups: [[LyricLetter]] = []
+    var current: [LyricLetter] = []
+    for (i, ch) in text.enumerated() {
+        if ch == " " {
+            if !current.isEmpty { groups.append(current); current = [] }
         } else {
-            state.width -= d.width + spacing
-        }
-        return result
-    }
-
-    private func topGuide(_ d: ViewDimensions, item: Data.Element, state: FlexibleLayoutState) -> CGFloat {
-        let result = state.height
-        if item == data.last {
-            state.height = 0
-        }
-        return result
-    }
-
-    private func viewHeightReader(_ binding: Binding<CGFloat>) -> some View {
-        GeometryReader { geo -> Color in
-            DispatchQueue.main.async {
-                binding.wrappedValue = geo.frame(in: .local).size.height
-            }
-            return .clear
+            current.append(LyricLetter(id: i, char: ch))
         }
     }
+    if !current.isEmpty { groups.append(current) }
+    return groups
 }
 
-private final class FlexibleLayoutState {
-    var width: CGFloat = 0
-    var height: CGFloat = 0
+/// Wrapping container for word groups (and, elsewhere, annotation-marker
+/// rows). Replaces the old `WrapHStack`/`FlexibleView`, which measured every
+/// item through a `GeometryReader` plus O(n) `alignmentGuide` callbacks --
+/// fine for a handful of words, but once annotations went letter-level
+/// (hundreds of tap targets per screen) that approach was doing real,
+/// visible work on every layout pass and was a chunk of the lag. SwiftUI's
+/// `Layout` protocol does the same wrapping in one measurement pass with no
+/// extra state or reflow, and needs no GeometryReader at all.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        let width = maxWidth.isFinite ? maxWidth : x
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
 }
 
 struct DisplayNote: Identifiable {
@@ -437,3 +443,4 @@ struct NewAnnotationEditorBox: View {
         .padding(.top, 8)
     }
 }
+

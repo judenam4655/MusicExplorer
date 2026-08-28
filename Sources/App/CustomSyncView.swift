@@ -24,6 +24,13 @@ enum SyncEditMode: String, CaseIterable {
     case translation = "Translation Only"
 }
 
+/// Not `private` to `CustomSyncView` on purpose -- shared by `SyncBlockRow`
+/// too, and there's nowhere else it needs hiding from.
+fileprivate func isValidTime(_ text: String) -> Bool {
+    if text.isEmpty { return true }
+    return LRCTimeFormatter.stringToMs(text) != nil
+}
+
 struct CustomModeButton: View {
     let icon: String
     let isSelected: Bool
@@ -52,9 +59,17 @@ struct CustomSyncView: View {
     
     @State private var blocks: [SyncBlock] = [SyncBlock()]
     @State private var syncModeActive = false
-    @State private var currentSyncIndex = 0
+    // ID-based, not index-based: indices shift on every insert/delete, which
+    // used to force the whole `blocks` array to be re-touched (and every
+    // row's inline bindings rebuilt) just to keep the "current" pointer
+    // valid. Tracking the block's own id sidesteps that entirely.
+    @State private var currentSyncID: UUID? = nil
     @State private var editMode: SyncEditMode = .both
     @State private var spacebarMonitor: Any?
+    // Only the spacebar sync trigger writes here. currentSyncID still
+    // updates on click/typing (for the highlight), but that alone must never
+    // scroll -- only this should.
+    @State private var scrollTargetID: UUID? = nil
 
     @FocusState private var focusedField: SyncFocusField?
 
@@ -121,106 +136,55 @@ struct CustomSyncView: View {
             Divider()
             
             // EDITOR BLOCKS
+            //
+            // Perf note: each row used to be built inline here with
+            // `Binding(get:set:)` closures reading/writing `blocks[index]`
+            // directly. Because that binding's storage IS this view's
+            // @State array, typing a single character invalidated the
+            // *whole* array, which re-ran this ForEach and rebuilt every
+            // row's closures -- for a full song that's 100-300 rows
+            // reconstructed per keystroke, which is what was laggy.
+            //
+            // Now each row is its own `Equatable` view fed a `Binding` to
+            // just its own element via `ForEach($blocks)`. SwiftUI compares
+            // old vs. new row values via `.equatable()` and skips re-running
+            // `body` for every row except the one that actually changed.
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                            VStack(spacing: 0) {
-                                
-                                if editMode == .both {
-                                    // MODE: BOTH (Full Sync Controls)
-                                    HStack(alignment: .top, spacing: 16) {
-                                        Button(action: {
-                                            if let ms = LRCTimeFormatter.stringToMs(blocks[index].timeText) {
-                                                appState.services.seek(to: ms)
-                                            }
-                                        }) {
-                                            Image(systemName: "play.fill")
-                                                .font(.system(size: 12))
-                                                .foregroundColor(blocks[index].timeText.isEmpty ? .gray.opacity(0.4) : .accentColor)
-                                                .frame(width: 24, height: 24)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .padding(.top, 4)
-                                        
-                                        TextField("00:00.00", text: Binding(
-                                            get: { blocks[index].timeText },
-                                            set: { blocks[index].timeText = $0 }
-                                        ))
-                                        .font(.system(.body, design: .monospaced))
-                                        .textFieldStyle(.plain)
-                                        .focused($focusedField, equals: .time(block.id))
-                                        .frame(width: 70)
-                                        .foregroundColor(isValidTime(blocks[index].timeText) ? .primary : .red)
-                                        .padding(.top, 6)
-                                        
-                                        TextField("Lyrics...", text: Binding(
-                                            get: { blocks[index].lyricsText },
-                                            set: { handleLyricsChange($0, at: index) }
-                                        ), axis: .vertical)
-                                        .textFieldStyle(.plain)
-                                        .focused($focusedField, equals: .lyrics(block.id))
-                                        .lineLimit(2...10)
-                                        .padding(.top, 6)
-                                        
-                                        VStack(spacing: 16) {
-                                            Button(action: { addBlock(after: index) }) { Image(systemName: "plus").foregroundColor(.secondary) }.buttonStyle(.plain)
-                                            Button(action: { deleteBlock(at: index) }) { Image(systemName: "minus").foregroundColor(.secondary) }.buttonStyle(.plain).disabled(blocks.count <= 1)
-                                        }
-                                        .padding(.top, 6)
+                        ForEach($blocks) { $block in
+                            SyncBlockRow(
+                                block: $block,
+                                editMode: editMode,
+                                isSyncTarget: syncModeActive && block.id == currentSyncID,
+                                canDelete: blocks.count > 1,
+                                focusedField: $focusedField,
+                                onSeek: {
+                                    if let ms = LRCTimeFormatter.stringToMs(block.timeText) {
+                                        appState.services.seek(to: ms)
                                     }
-                                    .padding(.vertical, 16)
-                                    .padding(.horizontal, 24)
-                                    .background(syncModeActive && index == currentSyncIndex ? Color.accentColor.opacity(0.1) : Color.clear)
-                                    
-                                } else {
-                                    // FIX: MODE: TRANSLATION ONLY (Simplified UI)
-                                    HStack(alignment: .top, spacing: 16) {
-                                        // Read-Only Time
-                                        Text(blocks[index].timeText.isEmpty ? "--:--.--" : blocks[index].timeText)
-                                            .font(.system(.body, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                            .frame(width: 70, alignment: .leading)
-                                            .padding(.top, 8)
-                                        
-                                        VStack(alignment: .leading, spacing: 10) {
-                                            // Read-Only Original Lyrics
-                                            Text(blocks[index].originalText ?? "♪")
-                                                .font(.system(.body, weight: .semibold))
-                                                .foregroundColor(.primary)
-                                            
-                                            // Translation Editor Box
-                                            TextField("Translation...", text: Binding(
-                                                get: { blocks[index].lyricsText },
-                                                set: { blocks[index].lyricsText = $0 }
-                                            ), axis: .vertical)
-                                            .textFieldStyle(.plain)
-                                            .lineLimit(1...5)
-                                            .padding(10)
-                                            .background(Color.primary.opacity(0.05))
-                                            .cornerRadius(6)
-                                        }
-                                    }
-                                    .padding(.vertical, 16)
-                                    .padding(.horizontal, 24)
-                                }
-                                
-                                Divider()
-                            }
+                                },
+                                onAdd: { addBlock(afterID: block.id) },
+                                onDelete: { deleteBlock(id: block.id) },
+                                onLyricsChange: { newValue in handleLyricsChange(newValue, id: block.id) }
+                            )
+                            .equatable()
                             .id(block.id)
                         }
                     }
                 }
-                .onChange(of: currentSyncIndex) { newIndex in
-                    guard newIndex < blocks.count else { return }
-                    withAnimation { proxy.scrollTo(blocks[newIndex].id, anchor: .center) }
+                .onChange(of: scrollTargetID) { id in
+                    guard let id else { return }
+                    withAnimation { proxy.scrollTo(id, anchor: .center) }
                 }
                 .onChange(of: focusedField) { newFocus in
+                    // Clicking or typing into a block updates which block is
+                    // "current" (for the highlight), but must NOT auto-scroll.
                     if editMode == .both {
-                        if case .lyrics(let id) = newFocus, let index = blocks.firstIndex(where: { $0.id == id }) {
-                            currentSyncIndex = index
-                        } else if case .time(let id) = newFocus, let index = blocks.firstIndex(where: { $0.id == id }) {
-                            currentSyncIndex = index
+                        if case .lyrics(let id) = newFocus {
+                            currentSyncID = id
+                        } else if case .time(let id) = newFocus {
+                            currentSyncID = id
                         }
                     }
                 }
@@ -240,13 +204,18 @@ struct CustomSyncView: View {
         loadCurrentLyrics()
     }
     
-    private func handleLyricsChange(_ newValue: String, at index: Int) {
+    private func handleLyricsChange(_ newValue: String, id: UUID) {
+        guard let index = blocks.firstIndex(where: { $0.id == id }) else { return }
         guard newValue.contains("\n\n") else {
             blocks[index].lyricsText = newValue
             return
         }
         
         DispatchQueue.main.async {
+            // Re-resolve the index: the array may have changed (another
+            // async split, a delete, etc.) between now and when this was
+            // scheduled.
+            guard let index = blocks.firstIndex(where: { $0.id == id }) else { return }
             let parts = newValue.components(separatedBy: "\n\n")
             blocks[index].lyricsText = parts[0]
             
@@ -262,16 +231,19 @@ struct CustomSyncView: View {
         }
     }
     
-    private func addBlock(after index: Int) {
+    private func addBlock(afterID id: UUID) {
+        guard let index = blocks.firstIndex(where: { $0.id == id }) else { return }
         let newBlock = SyncBlock()
         blocks.insert(newBlock, at: index + 1)
         DispatchQueue.main.async { focusedField = .lyrics(newBlock.id) }
     }
     
-    private func deleteBlock(at index: Int) {
-        guard blocks.count > 1 else { return }
+    private func deleteBlock(id: UUID) {
+        guard blocks.count > 1, let index = blocks.firstIndex(where: { $0.id == id }) else { return }
         blocks.remove(at: index)
-        if currentSyncIndex >= blocks.count { currentSyncIndex = blocks.count - 1 }
+        if currentSyncID == id {
+            currentSyncID = blocks.indices.contains(index) ? blocks[index].id : blocks.last?.id
+        }
     }
     
     private func setupKeyboardMonitor() {
@@ -295,16 +267,20 @@ struct CustomSyncView: View {
         if !appState.services.isPlaying {
             appState.services.togglePlayPause()
         } else {
-            guard currentSyncIndex < blocks.count else { return }
+            guard let currentID = currentSyncID, let idx = blocks.firstIndex(where: { $0.id == currentID }) else {
+                currentSyncID = blocks.first?.id
+                return
+            }
             let currentMs = appState.positionMs
-            blocks[currentSyncIndex].timeText = LRCTimeFormatter.msToString(currentMs)
-            currentSyncIndex += 1
+            blocks[idx].timeText = LRCTimeFormatter.msToString(currentMs)
+            let nextIdx = idx + 1
+            // Spacebar syncing is the one case that should auto-scroll, so
+            // it's the only place that sets scrollTargetID.
+            if blocks.indices.contains(nextIdx) {
+                currentSyncID = blocks[nextIdx].id
+                scrollTargetID = blocks[nextIdx].id
+            }
         }
-    }
-    
-    private func isValidTime(_ text: String) -> Bool {
-        if text.isEmpty { return true }
-        return LRCTimeFormatter.stringToMs(text) != nil
     }
     
     private func loadCurrentLyrics() {
@@ -358,7 +334,7 @@ struct CustomSyncView: View {
         }
 
         if blocks.isEmpty { blocks = [SyncBlock()] }
-        currentSyncIndex = 0
+        currentSyncID = blocks.first?.id
     }
 
     private func saveCustomLRC() {
@@ -413,5 +389,106 @@ struct CustomSyncView: View {
         }
         appState.services.saveCustomTranslation(lrcText: translationLRC)
         syncModeActive = false
+    }
+}
+
+/// A single editor row, isolated so a keystroke in one row doesn't force
+/// SwiftUI to re-diff every other row in the (potentially 100-300 row) list.
+/// `.equatable()` at the call site is what actually activates the skip --
+/// see the perf note above `ScrollViewReader` in `CustomSyncView`.
+struct SyncBlockRow: View, Equatable {
+    @Binding var block: SyncBlock
+    let editMode: SyncEditMode
+    let isSyncTarget: Bool
+    let canDelete: Bool
+    let focusedField: FocusState<SyncFocusField?>.Binding
+    let onSeek: () -> Void
+    let onAdd: () -> Void
+    let onDelete: () -> Void
+    let onLyricsChange: (String) -> Void
+
+    // Closures are intentionally excluded: they're re-created every parent
+    // render regardless (cheap), but comparing them would make `.equatable()`
+    // always report "changed" and defeat the whole point.
+    static func == (lhs: SyncBlockRow, rhs: SyncBlockRow) -> Bool {
+        lhs.block == rhs.block
+            && lhs.editMode == rhs.editMode
+            && lhs.isSyncTarget == rhs.isSyncTarget
+            && lhs.canDelete == rhs.canDelete
+    }
+
+    private var lyricsBinding: Binding<String> {
+        Binding(get: { block.lyricsText }, set: onLyricsChange)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if editMode == .both {
+                // MODE: BOTH (Full Sync Controls)
+                HStack(alignment: .top, spacing: 16) {
+                    Button(action: onSeek) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(block.timeText.isEmpty ? .gray.opacity(0.4) : .accentColor)
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+
+                    TextField("00:00.00", text: $block.timeText)
+                        .font(.system(.body, design: .monospaced))
+                        .textFieldStyle(.plain)
+                        .focused(focusedField, equals: .time(block.id))
+                        .frame(width: 70)
+                        .foregroundColor(isValidTime(block.timeText) ? .primary : .red)
+                        .padding(.top, 6)
+
+                    TextField("Lyrics...", text: lyricsBinding, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .focused(focusedField, equals: .lyrics(block.id))
+                        .lineLimit(2...10)
+                        .padding(.top, 6)
+
+                    VStack(spacing: 16) {
+                        Button(action: onAdd) { Image(systemName: "plus").foregroundColor(.secondary) }.buttonStyle(.plain)
+                        Button(action: onDelete) { Image(systemName: "minus").foregroundColor(.secondary) }.buttonStyle(.plain).disabled(!canDelete)
+                    }
+                    .padding(.top, 6)
+                }
+                .padding(.vertical, 16)
+                .padding(.horizontal, 24)
+                .background(isSyncTarget ? Color.accentColor.opacity(0.1) : Color.clear)
+
+            } else {
+                // FIX: MODE: TRANSLATION ONLY (Simplified UI)
+                HStack(alignment: .top, spacing: 16) {
+                    // Read-Only Time
+                    Text(block.timeText.isEmpty ? "--:--.--" : block.timeText)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(width: 70, alignment: .leading)
+                        .padding(.top, 8)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Read-Only Original Lyrics
+                        Text(block.originalText ?? "♪")
+                            .font(.system(.body, weight: .semibold))
+                            .foregroundColor(.primary)
+
+                        // Translation Editor Box
+                        TextField("Translation...", text: $block.lyricsText, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .lineLimit(1...5)
+                            .padding(10)
+                            .background(Color.primary.opacity(0.05))
+                            .cornerRadius(6)
+                    }
+                }
+                .padding(.vertical, 16)
+                .padding(.horizontal, 24)
+            }
+
+            Divider()
+        }
     }
 }

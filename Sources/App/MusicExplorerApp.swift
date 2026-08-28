@@ -69,12 +69,18 @@ final class AppState: ObservableObject {
                 case .notFound:
                     self?.currentLineText = "No synced lyrics found"
                     self?.plainLyricsText = nil
+                    self?.syncedLines = nil
+                    self?.translatedLines = nil
                 case .timeout:
                     self?.currentLineText = "Lyrics request timed out"
                     self?.plainLyricsText = nil
+                    self?.syncedLines = nil
+                    self?.translatedLines = nil
                 case .error:
                     self?.currentLineText = "Error loading lyrics"
                     self?.plainLyricsText = nil
+                    self?.syncedLines = nil
+                    self?.translatedLines = nil
                 }
             }
         }
@@ -260,8 +266,6 @@ struct LyricLineView: View {
 
     @State private var isHovered = false
     @State private var isNoteExpanded = false
-    
-    private var words: [String] { originalText.split(separator: " ").map(String.init) }
 
     private var displayNotes: [(tag: String, note: LyricAnnotation)] {
         var results: [(tag: String, note: LyricAnnotation)] = []
@@ -332,16 +336,25 @@ struct LyricLineView: View {
                     .font(.system(size: isCurrent ? lyricSize : lyricSize - 4, weight: isCurrent ? .bold : .medium))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
             } else if showAnnotations && !annotations.isEmpty {
+                // Grouped by word (for natural spacing/wrapping) but each
+                // letter is its own unit -- must match lyricLetterGroups'
+                // indexing so a tag lands on the exact letter it was placed
+                // on in the notes editor, not just "the word containing it".
+                let groups = lyricLetterGroups(for: originalText)
                 HStack(spacing: 4) {
-                    ForEach(words.indices, id: \.self) { i in
-                        HStack(spacing: 1) {
-                            Text(words[i])
-                            if let tag = displayNotes.first(where: { $0.note.wordIndex == i })?.tag {
-                                Text(tag)
-                                    .font(.system(size: annotationSize, weight: .bold))
-                                    .baselineOffset(8)
-                                    // Matched to lyric color exactly
-                                    .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
+                    ForEach(Array(groups.indices), id: \.self) { g in
+                        HStack(spacing: 0) {
+                            ForEach(groups[g]) { letter in
+                                HStack(spacing: 0) {
+                                    Text(String(letter.char))
+                                    if let tag = displayNotes.first(where: { $0.note.wordIndex == letter.id })?.tag {
+                                        Text(tag)
+                                            .font(.system(size: annotationSize, weight: .bold))
+                                            .baselineOffset(8)
+                                            // Matched to lyric color exactly
+                                            .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
+                                    }
+                                }
                             }
                         }
                     }
@@ -481,6 +494,7 @@ struct LyricsMainView: View {
                 .padding(.horizontal, 40)
                 .frame(maxWidth: .infinity, alignment: align == .center ? .center : (align == .left ? .leading : .trailing))
             }
+            .id(appState.trackTitle)
             .onChange(of: appState.currentLineIndex) { newIndex in
                 guard let idx = newIndex else { return }
                 withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
@@ -504,7 +518,10 @@ struct LyricsMainView: View {
             // custom untimed lines, and nil == nil would wrongly match
             // every untimed line to the first untimed translation.
             let translated = appState.translatedLines
-            let transText = (translated != nil && index < translated!.count) ? translated![index].text : nil
+            let rawTransText = (translated != nil && index < translated!.count) ? translated![index].text : nil
+
+            let transText = ["(intl)", "(end)", "(끝)", "♪"].contains(rawTransText?.trimmingCharacters(in: .whitespaces).lowercased() ?? "") ? nil : rawTransText
+            
             let lineAnnotations = appState.annotationsByLine[index] ?? []
             let lineNote = appState.lineNotes[index]
 
