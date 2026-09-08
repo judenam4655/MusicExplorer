@@ -204,6 +204,14 @@ struct ContentView: View {
 
             // 2. RESIZABLE PANELS WITH GEOMETRY RATIOS
             GeometryReader { geometry in
+                // The 60%-width cap on secondary panels exists so they don't
+                // crowd out the Lyrics panel when both are open. If Lyrics
+                // isn't open, nothing needs that headroom -- capping anyway
+                // left a blank strip on the right when e.g. Song Info was
+                // the only panel open. Only cap when Lyrics is actually
+                // sharing the window.
+                let secondaryMaxWidth: CGFloat = activePanels.contains(.lyrics) ? geometry.size.width * 0.6 : .infinity
+
                 HSplitView {
 
                     if activePanels.contains(.lyrics) {
@@ -213,29 +221,47 @@ struct ContentView: View {
 
                     if activePanels.contains(.info) {
                         SongInfoEditorView()
-                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: geometry.size.width * 0.6)
+                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: secondaryMaxWidth)
                     }
 
                     if activePanels.contains(.history) {
                         Text("Play History")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: geometry.size.width * 0.6)
+                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: secondaryMaxWidth)
                     }
 
                     if activePanels.contains(.sync) {
                         CustomSyncView()
-                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: geometry.size.width * 0.6)
+                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: secondaryMaxWidth)
                     }
 
                     if activePanels.contains(.notes) {
                         LyricsNoteEditorView()
-                            .frame(minWidth: 260, idealWidth: geometry.size.width * 0.4, maxWidth: geometry.size.width * 0.6)
+                            .frame(minWidth: 340, idealWidth: geometry.size.width * 0.4, maxWidth: secondaryMaxWidth)
                     }
 
                 }
             }
         }
-        .frame(minWidth: 800, minHeight: 500)
+        .frame(minWidth: effectiveMinWidth, minHeight: effectiveMinHeight)
+        .onPreferenceChange(NotesIdealSizeKey.self) { notesIdealSize = $0 }
+    }
+
+    // MARK: - Dynamic window minimum size
+    @State private var notesIdealSize: CGSize = .zero
+    private let baseMinWidth: CGFloat = 800
+    private let baseMinHeight: CGFloat = 500
+    private let sidebarChromeWidth: CGFloat = 100   // sidebar (60) + dividers/padding
+    private let toolbarChromeHeight: CGFloat = 120  // notes page header + outer padding
+
+    private var effectiveMinWidth: CGFloat {
+        guard activePanels.contains(.notes), notesIdealSize.width > 0 else { return baseMinWidth }
+        return max(baseMinWidth, notesIdealSize.width + sidebarChromeWidth)
+    }
+
+    private var effectiveMinHeight: CGFloat {
+        guard activePanels.contains(.notes), notesIdealSize.height > 0 else { return baseMinHeight }
+        return max(baseMinHeight, notesIdealSize.height + toolbarChromeHeight)
     }
 
     private func toggle(_ panel: AppPanel) {
@@ -270,7 +296,11 @@ struct LyricLineView: View {
     private var displayNotes: [(tag: String, note: LyricAnnotation)] {
         var results: [(tag: String, note: LyricAnnotation)] = []
         var counter = 1
-        for note in annotations.sorted(by: { $0.wordIndex < $1.wordIndex }) {
+        let sorted = annotations.sorted { a, b in
+            if a.wordIndex != b.wordIndex { return a.wordIndex < b.wordIndex }
+            return (a.id ?? 0) < (b.id ?? 0)
+        }
+        for note in sorted {
             if let custom = note.marker, !custom.isEmpty {
                 results.append(("[\(custom)]", note))
             } else {
@@ -310,7 +340,6 @@ struct LyricLineView: View {
                 if hasNote {
                     lineNoteContainer
                         .frame(maxWidth: 300, alignment: align == .left ? .leading : (align == .right ? .trailing : .center))
-//                        .padding(.leading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: align == .left ? .leading : (align == .right ? .trailing : .center))
@@ -336,10 +365,6 @@ struct LyricLineView: View {
                     .font(.system(size: isCurrent ? lyricSize : lyricSize - 4, weight: isCurrent ? .bold : .medium))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
             } else if showAnnotations && !annotations.isEmpty {
-                // Grouped by word (for natural spacing/wrapping) but each
-                // letter is its own unit -- must match lyricLetterGroups'
-                // indexing so a tag lands on the exact letter it was placed
-                // on in the notes editor, not just "the word containing it".
                 let groups = lyricLetterGroups(for: originalText)
                 HStack(spacing: 4) {
                     ForEach(Array(groups.indices), id: \.self) { g in
@@ -347,11 +372,10 @@ struct LyricLineView: View {
                             ForEach(groups[g]) { letter in
                                 HStack(spacing: 0) {
                                     Text(String(letter.char))
-                                    if let tag = displayNotes.first(where: { $0.note.wordIndex == letter.id })?.tag {
-                                        Text(tag)
+                                    ForEach(displayNotes.filter { $0.note.wordIndex == letter.id }, id: \.note.id) { item in
+                                        Text(item.tag)
                                             .font(.system(size: annotationSize, weight: .bold))
                                             .baselineOffset(8)
-                                            // Matched to lyric color exactly
                                             .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                                     }
                                 }
@@ -378,10 +402,9 @@ struct LyricLineView: View {
 
             if showAnnotations && !displayNotes.isEmpty {
                 VStack(spacing: 2) {
-                    ForEach(displayNotes, id: \.note.wordIndex) { item in
+                    ForEach(displayNotes, id: \.note.id) { item in
                         Text("\(item.tag): \(item.note.noteText)")
                             .font(.system(size: annotationSize, weight: .bold))
-                            // Matched to lyric color exactly
                             .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                             .frame(maxWidth: 350)
                     }
@@ -399,12 +422,10 @@ struct LyricLineView: View {
                 Text(text)
                     .font(.system(size: noteSize))
                     .foregroundStyle(.secondary)
-                    // Allows 6 lines (double the previous amount) before truncating
                     .lineLimit(isNoteExpanded ? nil : 6)
                     .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .topLeading) // Anchors text to the top
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 
-                // Lowered threshold to 60 characters per your request
                 if text.count > 140 {
                     Button(action: {
                         withAnimation { isNoteExpanded.toggle() }
@@ -417,7 +438,6 @@ struct LyricLineView: View {
                 }
             }
             .padding(10)
-            // Forces the represented container to be 100% taller visually
             .frame(minHeight: 120, alignment: .topLeading)
             .background(Color.secondary.opacity(0.1))
             .cornerRadius(8)
@@ -514,9 +534,6 @@ struct LyricsMainView: View {
         if isEndMarker {
             Color.clear.frame(height: 1).id(index)
         } else {
-            // Paired by position, not by timeMs — timeMs may be nil for
-            // custom untimed lines, and nil == nil would wrongly match
-            // every untimed line to the first untimed translation.
             let translated = appState.translatedLines
             let rawTransText = (translated != nil && index < translated!.count) ? translated![index].text : nil
 

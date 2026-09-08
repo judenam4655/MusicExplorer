@@ -152,6 +152,12 @@ final class SQLiteDB {
         }
     }
 
+    func lastInsertRowId() -> Int64 {
+        queue.sync {
+            sqlite3_last_insert_rowid(db)
+        }
+    }
+    
     private func bind(_ bindings: [Any?], to stmt: OpaquePointer?) {
         guard let stmt = stmt else { return }
         
@@ -162,6 +168,8 @@ final class SQLiteDB {
                 sqlite3_bind_text(stmt, idx, v, -1, SQLITE_TRANSIENT)
             case let v as Int:
                 sqlite3_bind_int64(stmt, idx, Int64(v))
+            case let v as Int64:
+                sqlite3_bind_int64(stmt, idx, v)
             case let v as Double:
                 sqlite3_bind_double(stmt, idx, v)
             case nil:

@@ -13,3 +13,4 @@ struct LyricAnnotation: Identifiable, Equatable {
     var marker: String?
     let updatedAt: Date
 }
+ 

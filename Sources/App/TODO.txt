@@ -9,15 +9,25 @@ Future direction:
         - Is this best reactivity for clicking(changing) lyrics? Must consider your idea first, and idk this would work but try using this https://github.com/ungive/mediaremote-adapter.
 ***
 
+9/7/2026
+
+[1.] Try developing prototype. - Important as it addresses performances as well
+
+2. Note editor
+2-1. text collapses-"Line Note" and lyrics(done)
+2-2. 
+
+
+
 8/26/2026
 
 1. Track note editor(not line note or annotation) should appear at the top of the lyric note editor. For its representation, it should appear under artist's name(which is under title's name). This also should also be affected by note button, that hides/shows every annotation and note.
 
-2. Note editor, multiple annotations for each letter.
+2. Note editor, multiple annotations for each letter. (done)
 
-3. Song info(and all other page except lyric main page) is not full size when only song info page was open.
+3. Song info(and all other page except lyric main page) is not full size when only song info page was open. (done)
 
-4. Note editor page, limit window size until note box expands(window min size = text box ideal size(or max))
+4. Note editor page, limit window size until note box expands(window min size = text box ideal size(or max)) (done, diverged issues)
 
 [5.] Try developing prototype.
 

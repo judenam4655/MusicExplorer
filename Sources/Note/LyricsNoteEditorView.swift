@@ -1,5 +1,36 @@
 import SwiftUI
 
+/// The "lyrics note page": per-letter annotations (shown as a superscript
+/// marker inline, with the note text listed as a footnote below) plus one
+/// free-form note per track. Layout per spec: original line, translated
+/// line, extra space, then annotation footnotes.
+///
+/// Letter-level: each character gets its own tap target (grouped visually by
+/// word so wrapping still looks like normal text). Annotations are keyed by
+/// a letter's index within the full line string.
+///
+/// A line isn't limited to one annotation per letter: the "+ Add annotation"
+/// button below each line opens another editor that isn't pinned to any
+/// letter at all, using a synthetic (negative) index so it can't collide
+/// with a real character position. Add as many of these as you like.
+
+
+/// Reports the natural (unconstrained) size of one representative note-editor
+/// row up to `ContentView`, which uses it to set the window's *minimum*
+/// size while the Notes panel is open -- see the "Dynamic window minimum
+/// size" section there. Deliberately measures only the first line (via a
+/// single GeometryReader), not every row: the goal is "don't let the window
+/// get smaller than one comfortable row", not "fit the whole song", which
+/// would defeat scrolling and also reintroduce the per-row GeometryReader
+/// cost we removed for the letter-annotation performance fix.
+struct NotesIdealSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        value = CGSize(width: max(value.width, next.width), height: max(value.height, next.height))
+    }
+}
+
 struct LyricsNoteEditorView: View {
     @EnvironmentObject var appState: AppState
     @State private var editingWord: (lineIndex: Int, wordIndex: Int)? = nil
@@ -22,7 +53,16 @@ struct LyricsNoteEditorView: View {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     if let lines = appState.syncedLines, !lines.isEmpty {
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            lineBlock(index: index, line: line)
+                            if index == 0 {
+                                lineBlock(index: index, line: line)
+                                    .background(
+                                        GeometryReader { geo in
+                                            Color.clear.preference(key: NotesIdealSizeKey.self, value: geo.size)
+                                        }
+                                    )
+                            } else {
+                                lineBlock(index: index, line: line)
+                            }
                         }
                     } else {
                         Text("No synced lyrics loaded for this track yet.")
@@ -74,7 +114,13 @@ struct LyricsNoteEditorView: View {
 
         var displayNotes: [DisplayNote] = []
         var counter = 1
-        for note in lineAnnotations.sorted(by: { $0.wordIndex < $1.wordIndex }) {
+        // Ties (several annotations on the same letter) ordered by id, i.e.
+        // roughly creation order.
+        let sortedAnnotations = lineAnnotations.sorted { a, b in
+            if a.wordIndex != b.wordIndex { return a.wordIndex < b.wordIndex }
+            return (a.id ?? 0) < (b.id ?? 0)
+        }
+        for note in sortedAnnotations {
             if let custom = note.marker, !custom.isEmpty {
                 displayNotes.append(DisplayNote(tag: "[\(custom)]", note: note))
             } else {
@@ -86,10 +132,10 @@ struct LyricsNoteEditorView: View {
         // Negative indices are "general" line annotations added via the "+"
         // button (not tied to a letter), so they get a neutral label instead
         // of looking up a nonexistent character.
-        func label(for charIndex: Int) -> String {
-            if charIndex < 0 { return "Note" }
+        func label(for wordIndex: Int) -> String {
+            if wordIndex < 0 { return "Note" }
             let chars = Array(line.text)
-            return chars.indices.contains(charIndex) ? String(chars[charIndex]) : "?"
+            return chars.indices.contains(wordIndex) ? String(chars[wordIndex]) : "?"
         }
 
         return HStack(alignment: .top, spacing: 20) {
@@ -99,16 +145,11 @@ struct LyricsNoteEditorView: View {
                     ForEach(groups.indices, id: \.self) { groupIndex in
                         HStack(spacing: 0) {
                             ForEach(groups[groupIndex]) { letter in
-                                let noteObj = displayNotes.first(where: { $0.note.wordIndex == letter.id })
-                                letterView(
-                                    lineIndex: index,
-                                    charIndex: letter.id,
-                                    char: String(letter.char),
-                                    tag: noteObj?.tag,
-                                    hasExisting: noteObj != nil
-                                )
+                                let tagsForLetter = displayNotes.filter { $0.note.wordIndex == letter.id }.map { $0.tag }
+                                letterView(lineIndex: index, charIndex: letter.id, char: String(letter.char), tags: tagsForLetter)
                             }
                         }
+                        .fixedSize()
                     }
                 }
 
@@ -119,12 +160,14 @@ struct LyricsNoteEditorView: View {
                         .padding(.top, 2)
                 }
 
-                // 1. EXIST BY DEFAULT: Editors for already-annotated letters,
-                // plus any free-standing "general" annotations for this line.
+                // 1. EXIST BY DEFAULT: Editors for every saved annotation on
+                // this line -- a letter can have more than one now, plus any
+                // free-standing "general" annotations for this line.
                 if !displayNotes.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(displayNotes) { item in
                             AnnotationEditorBox(
+                                id: item.note.id,
                                 lineIndex: index,
                                 wordIndex: item.note.wordIndex,
                                 word: label(for: item.note.wordIndex),
@@ -136,9 +179,10 @@ struct LyricsNoteEditorView: View {
                     .padding(.top, 8)
                 }
                 
-                // 2. NEW ANNOTATION: Appears when an empty letter is clicked,
+                // 2. NEW ANNOTATION: Appears when a letter is clicked -- its
+                // first annotation, or one more on top of existing ones --
                 // or after tapping "Add annotation" below.
-                if let editing = editingWord, editing.lineIndex == index, !displayNotes.contains(where: { $0.note.wordIndex == editing.wordIndex }) {
+                if let editing = editingWord, editing.lineIndex == index {
                     NewAnnotationEditorBox(lineIndex: index, wordIndex: editing.wordIndex, word: label(for: editing.wordIndex)) {
                         editingWord = nil
                     }
@@ -146,7 +190,7 @@ struct LyricsNoteEditorView: View {
 
                 // A line isn't limited to one annotation per letter -- this
                 // opens another editor that isn't pinned to any letter,
-                // using a synthetic negative index so it never collides with
+                // using a synthetic negative index so it can't collide with
                 // a real character position (which are always >= 0).
                 Button {
                     let lowestUsed = lineAnnotations.map { $0.wordIndex }.min() ?? 0
@@ -163,8 +207,8 @@ struct LyricsNoteEditorView: View {
 
             // RIGHT COLUMN: Per-line Note Text Box
             VStack(alignment: .leading, spacing: 4) {
-                Text("Line Note").font(.caption2).foregroundStyle(.secondary)
-                LineNoteEditorBox(lineIndex: index)
+//                Text("Line Note").font(.caption2).foregroundStyle(.secondary)
+                LineNoteEditorBox(lineIndex: index).padding(.top, 40)
             }
             .frame(width: 260)
         }
@@ -174,29 +218,31 @@ struct LyricsNoteEditorView: View {
     // letter-level) carries focus/hover/accessibility overhead that adds up.
     // A plain tappable `Text` does the same job for a fraction of the cost.
     @ViewBuilder
-    private func letterView(lineIndex: Int, charIndex: Int, char: String, tag: String?, hasExisting: Bool) -> some View {
+    private func letterView(lineIndex: Int, charIndex: Int, char: String, tags: [String]) -> some View {
         HStack(spacing: 0) {
             Text(char)
                 .font(.system(size: 18, weight: .medium))
+                .fixedSize()
             
-            if let tag = tag {
+            ForEach(tags, id: \.self) { tag in
                 Text(tag)
                     .font(.system(size: 10, weight: .bold))
                     .baselineOffset(8)
                     .foregroundStyle(.orange)
+                    .fixedSize()
             }
         }
+        .fixedSize()
         .contentShape(Rectangle())
         .onTapGesture {
-            if hasExisting {
-                // Do nothing if clicked; the editor is already permanently visible below!
-                return
-            }
-
+            // A letter can carry more than one annotation, so this always
+            // opens (or, if already open on this exact letter, closes)
+            // another "new annotation" editor -- it never refuses just
+            // because the letter already has one.
             if editingWord?.lineIndex == lineIndex && editingWord?.wordIndex == charIndex {
-                editingWord = nil // Toggle off
+                editingWord = nil
             } else {
-                editingWord = (lineIndex, charIndex) // Open new editor
+                editingWord = (lineIndex, charIndex)
             }
         }
     }
@@ -281,7 +327,7 @@ struct FlowLayout: Layout {
 }
 
 struct DisplayNote: Identifiable {
-    var id: Int { note.wordIndex }
+    var id: Int64 { note.id ?? -1 }
     let tag: String
     let note: LyricAnnotation
 }
@@ -298,7 +344,7 @@ struct LineNoteEditorBox: View {
             // Custom designed, true multi-line editor
             TextEditor(text: $draftText)
                 .font(.body)
-                .frame(minHeight: 80) // 100% taller height
+                .frame(minHeight: 80)
                 .padding(6)
                 .background(Color(NSColor.textBackgroundColor))
                 .cornerRadius(6)
@@ -334,6 +380,7 @@ struct LineNoteEditorBox: View {
 }
 
 struct AnnotationEditorBox: View {
+    let id: Int64?
     let lineIndex: Int
     let wordIndex: Int
     let word: String
@@ -356,7 +403,7 @@ struct AnnotationEditorBox: View {
                 
                 if isEditing {
                     Button {
-                        appState.services.saveAnnotation(lineIndex: lineIndex, wordIndex: wordIndex, text: text, marker: marker)
+                        appState.services.saveAnnotation(id: id, lineIndex: lineIndex, wordIndex: wordIndex, text: text, marker: marker)
                         appState.refreshAnnotations()
                         isEditing = false
                     } label: {
@@ -365,8 +412,10 @@ struct AnnotationEditorBox: View {
 //                    .buttonStyle(.borderedProminent).controlSize(.small)
                 }
                 Button {
-                    appState.services.saveAnnotation(lineIndex: lineIndex, wordIndex: wordIndex, text: "", marker: nil)
-                    appState.refreshAnnotations()
+                    if let id {
+                        appState.services.deleteAnnotation(id: id)
+                        appState.refreshAnnotations()
+                    }
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -443,4 +492,3 @@ struct NewAnnotationEditorBox: View {
         .padding(.top, 8)
     }
 }
-
