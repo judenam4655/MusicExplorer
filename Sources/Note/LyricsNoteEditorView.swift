@@ -36,12 +36,62 @@ struct LyricsNoteEditorView: View {
     @State private var editingWord: (lineIndex: Int, wordIndex: Int)? = nil
     @State private var draftNote: String = ""
     @State private var noteEditing = false
+    
+    // Bulk-editing path: hand the whole page off to the person's actual
+    // text editor instead of this view. See ExternalTextEditorBridge and
+    // LyricNoteTextFormat -- this view never touches the file's contents
+    // directly, it only knows the URL to read back from.
+    @State private var externalFileURL: URL? = nil
+    @State private var externalEditAlert: String? = nil
+    
+    // Internal Editor Modes & Options
+    @State private var isRawTextMode: Bool = false
+    @State private var enableAnnotationEdits: Bool = false
+    @State private var rawText: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Lyrics Notes").font(.headline)
+            HStack(spacing: 16) {
+                // Mode Switcher (Visual vs Raw Text)
+                HStack(spacing: 4) {
+                    CustomModeButton(icon: "eye", isSelected: !isRawTextMode) {
+                        if isRawTextMode { saveFromRawText() }
+                        isRawTextMode = false
+                    }
+                    CustomModeButton(icon: "text.alignleft", isSelected: isRawTextMode) {
+                        loadIntoRawText()
+                        isRawTextMode = true
+                    }
+                }
+                .padding(4)
+                .background(Color.primary.opacity(0.05))
+                .cornerRadius(8)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.1), lineWidth: 1))
+
+                // Optional Annotation Edits Toggle (Visual Mode only)
+                if !isRawTextMode {
+                    Toggle("Edits", isOn: $enableAnnotationEdits)
+                        .toggleStyle(.checkbox)
+                } else {
+                    Button("Save Text Changes") {
+                        saveFromRawText()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
                 Spacer()
+
+                // Existing External Editor Buttons
+                Button(action: openInExternalEditor) {
+                    Label("External Editor", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(.plain)
+
+                Button(action: loadFromExternalEditor) {
+                    Label("Load External", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(.plain)
+                .disabled(externalFileURL == nil)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -49,73 +99,214 @@ struct LyricsNoteEditorView: View {
 
             Divider()
 
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
-                    if let lines = appState.syncedLines, !lines.isEmpty {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            if index == 0 {
-                                lineBlock(index: index, line: line)
-                                    .background(
-                                        GeometryReader { geo in
-                                            Color.clear.preference(key: NotesIdealSizeKey.self, value: geo.size)
-                                        }
-                                    )
-                            } else {
-                                lineBlock(index: index, line: line)
-                            }
-                        }
-                    } else {
-                        Text("No synced lyrics loaded for this track yet.")
-                            .foregroundStyle(.secondary)
-                            .padding()
-                    }
-
-                    Divider().padding(.vertical, 8)
-
-                    // Global Track Notes
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Track Notes").font(.subheadline).bold()
-                            Spacer()
-                            Button(noteEditing ? "Save" : "Edit") {
-                                if noteEditing {
-                                    appState.services.saveLyricNote(draftNote)
-                                    appState.lyricNoteText = draftNote
+            // EDITOR CONTENT (Visual View vs Large Internal Text Editor)
+            if isRawTextMode {
+                TextEditor(text: $rawText)
+                    .font(.system(.body, design: .monospaced))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 24) {
+                        if let lines = appState.syncedLines, !lines.isEmpty {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                                if index == 0 {
+                                    lineBlock(index: index, line: line)
+                                        .background(
+                                            GeometryReader { geo in
+                                                Color.clear.preference(key: NotesIdealSizeKey.self, value: geo.size)
+                                            }
+                                        )
                                 } else {
-                                    draftNote = appState.lyricNoteText
+                                    lineBlock(index: index, line: line)
                                 }
-                                noteEditing.toggle()
+                            }
+                        } else {
+                            Text("No synced lyrics loaded for this track yet.")
+                                .foregroundStyle(.secondary)
+                                .padding()
+                        }
+
+                        Divider().padding(.vertical, 8)
+
+                        // Global Track Notes
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Track Notes").font(.subheadline).bold()
+                                Spacer()
+                                Button(noteEditing ? "Save" : "Edit") {
+                                    if noteEditing {
+                                        appState.services.saveLyricNote(draftNote)
+                                        appState.lyricNoteText = draftNote
+                                    } else {
+                                        draftNote = appState.lyricNoteText
+                                    }
+                                    noteEditing.toggle()
+                                }
+                            }
+                            if noteEditing {
+                                TextEditor(text: $draftNote)
+                                    .frame(minHeight: 120)
+                                    .font(.body)
+                            } else {
+                                Text(appState.lyricNoteText.isEmpty ? "No notes yet." : appState.lyricNoteText)
+                                    .foregroundStyle(appState.lyricNoteText.isEmpty ? .secondary : .primary)
                             }
                         }
-                        if noteEditing {
-                            TextEditor(text: $draftNote)
-                                .frame(minHeight: 120)
-                                .font(.body)
-                        } else {
-                            Text(appState.lyricNoteText.isEmpty ? "No notes yet." : appState.lyricNoteText)
-                                .foregroundStyle(appState.lyricNoteText.isEmpty ? .secondary : .primary)
-                        }
                     }
+                    .padding(20)
                 }
-                .padding(20)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .alert("Load Changes", isPresented: Binding(
+            get: { externalEditAlert != nil },
+            set: { if !$0 { externalEditAlert = nil } }
+        )) {
+            Button("OK") { externalEditAlert = nil }
+        } message: {
+            Text(externalEditAlert ?? "")
+        }
+    }
+
+    // MARK: - External text editor bridge
+
+    private func buildDocumentForExternalEditor() -> ParsedLyricDocument {
+        var doc = ParsedLyricDocument()
+        doc.songNote = appState.lyricNoteText
+
+        let lines = appState.syncedLines ?? []
+        for (index, line) in lines.enumerated() {
+            var parsedLine = ParsedLyricLine(timeMs: line.timeMs, text: line.text)
+            let existing = appState.annotationsByLine[index] ?? []
+            for note in existing.sorted(by: { $0.wordIndex < $1.wordIndex }) {
+                let marker = (note.marker?.isEmpty == false) ? note.marker! : "\(note.wordIndex)"
+                parsedLine.annotations.append(
+                    ParsedAnnotation(charIndex: note.wordIndex, marker: marker, noteText: note.noteText)
+                )
+            }
+            parsedLine.lineNote = appState.lineNotes[index] ?? ""
+            doc.lines.append(parsedLine)
+        }
+        return doc
+    }
+
+    private func openInExternalEditor() {
+        let doc = buildDocumentForExternalEditor()
+        let text = LyricNoteTextFormat.serialize(doc)
+        let filename = ExternalTextEditorBridge.sanitizedFilename(appState.trackTitle, suffix: "notes")
+        externalFileURL = ExternalTextEditorBridge.open(text: text, filename: filename)
+        
+        if let window = NSApplication.shared.windows.first(where: { $0.isKeyWindow ?? false }) {
+            if let screen = window.screen {
+                let screenRect = screen.visibleFrame
+                let newWidth: CGFloat = screenRect.width * 0.7
+                let newHeight = screenRect.height
+                
+                let newFrame = NSRect(
+                    x: screenRect.minX,
+                    y: screenRect.minY,
+                    width: newWidth,
+                    height: newHeight
+                )
+                
+                window.setFrame(newFrame, display: true, animate: true)
+            }
+        }
+    }
+
+    private func loadFromExternalEditor() {
+        guard let url = externalFileURL else { return }
+        guard let text = ExternalTextEditorBridge.load(from: url) else {
+            externalEditAlert = "Couldn't read the file. Make sure it's saved."
+            return
+        }
+
+        let doc = LyricNoteTextFormat.parse(text)
+
+        appState.services.saveLyricNote(doc.songNote)
+        appState.lyricNoteText = doc.songNote
+
+        let lines = appState.syncedLines ?? []
+        var mismatchWarning = ""
+        if doc.lines.count != lines.count {
+            mismatchWarning = " Note: the file has \(doc.lines.count) lyric lines but the song has \(lines.count) -- lines were matched by position, so double-check anything near the end."
+        }
+
+        for (index, _) in lines.enumerated() {
+            let oldAnnotations = appState.annotationsByLine[index] ?? []
+            let newAnnotations = index < doc.lines.count ? doc.lines[index].annotations : []
+            let newIndices = Set(newAnnotations.map { $0.charIndex })
+
+            for old in oldAnnotations where !newIndices.contains(old.wordIndex) {
+                appState.services.saveAnnotation(lineIndex: index, wordIndex: old.wordIndex, text: "", marker: nil)
+            }
+            for ann in newAnnotations {
+                appState.services.saveAnnotation(lineIndex: index, wordIndex: ann.charIndex, text: ann.noteText, marker: ann.marker)
+            }
+
+            let newLineNote = index < doc.lines.count ? doc.lines[index].lineNote : ""
+            appState.lineNotes[index] = newLineNote
+            appState.services.saveLineNote(lineIndex: index, text: newLineNote)
+        }
+
+        appState.refreshAnnotations()
+        externalEditAlert = "Changes loaded." + mismatchWarning
+    }
+    
+    // MARK: - Internal Raw Text Logic
+    
+    private func loadIntoRawText() {
+        let doc = buildDocumentForExternalEditor()
+        rawText = LyricNoteTextFormat.serialize(doc)
+    }
+
+    private func saveFromRawText() {
+        let doc = LyricNoteTextFormat.parse(rawText)
+
+        appState.services.saveLyricNote(doc.songNote)
+        appState.lyricNoteText = doc.songNote
+
+        let lines = appState.syncedLines ?? []
+        for (index, _) in lines.enumerated() {
+            let oldAnnotations = appState.annotationsByLine[index] ?? []
+            let newAnnotations = index < doc.lines.count ? doc.lines[index].annotations : []
+
+            var oldByIndex = Dictionary(oldAnnotations.map { ($0.wordIndex, $0) }, uniquingKeysWith: { a, _ in a })
+
+            for ann in newAnnotations {
+                if let existing = oldByIndex.removeValue(forKey: ann.charIndex), let id = existing.id {
+                    // Existing annotation at this position -> update in place.
+                    appState.services.saveAnnotation(id: id, lineIndex: index, wordIndex: ann.charIndex, text: ann.noteText, marker: ann.marker)
+                } else {
+                    // No existing annotation here -> genuinely new.
+                    appState.services.saveAnnotation(lineIndex: index, wordIndex: ann.charIndex, text: ann.noteText, marker: ann.marker)
+                }
+            }
+
+            // Anything left in oldByIndex had no counterpart in the new text -> actually delete it.
+            for (_, old) in oldByIndex {
+                if let id = old.id {
+                    appState.services.deleteAnnotation(id: id)
+                }
+            }
+
+            let newLineNote = index < doc.lines.count ? doc.lines[index].lineNote : ""
+            appState.lineNotes[index] = newLineNote
+            appState.services.saveLineNote(lineIndex: index, text: newLineNote)
+        }
+
+        appState.refreshAnnotations()
     }
 
     private func lineBlock(index: Int, line: LyricLine) -> some View {
         let groups = lyricLetterGroups(for: line.text)
         let lineAnnotations = appState.annotationsByLine[index] ?? []
-        // Paired by position, not by timeMs -- timeMs is nil for custom
-        // untimed lines, and matching on nil == nil would wrongly pin every
-        // untimed line to the first untimed translation ("recurring").
         let translated = appState.translatedLines
         let translation = (translated != nil && index < translated!.count) ? translated![index].text : nil
 
         var displayNotes: [DisplayNote] = []
         var counter = 1
-        // Ties (several annotations on the same letter) ordered by id, i.e.
-        // roughly creation order.
         let sortedAnnotations = lineAnnotations.sorted { a, b in
             if a.wordIndex != b.wordIndex { return a.wordIndex < b.wordIndex }
             return (a.id ?? 0) < (b.id ?? 0)
@@ -129,9 +320,6 @@ struct LyricsNoteEditorView: View {
             }
         }
 
-        // Negative indices are "general" line annotations added via the "+"
-        // button (not tied to a letter), so they get a neutral label instead
-        // of looking up a nonexistent character.
         func label(for wordIndex: Int) -> String {
             if wordIndex < 0 { return "Note" }
             let chars = Array(line.text)
@@ -160,63 +348,46 @@ struct LyricsNoteEditorView: View {
                         .padding(.top, 2)
                 }
 
-                // 1. EXIST BY DEFAULT: Editors for every saved annotation on
-                // this line -- a letter can have more than one now, plus any
-                // free-standing "general" annotations for this line.
-                if !displayNotes.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(displayNotes) { item in
-                            AnnotationEditorBox(
-                                id: item.note.id,
-                                lineIndex: index,
-                                wordIndex: item.note.wordIndex,
-                                word: label(for: item.note.wordIndex),
-                                initialMarker: item.note.marker ?? "",
-                                initialText: item.note.noteText
-                            )
+                // Annotation Editors rendered only if enabled
+                if enableAnnotationEdits {
+                    if !displayNotes.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(displayNotes) { item in
+                                AnnotationEditorBox(
+                                    id: item.note.id,
+                                    lineIndex: index,
+                                    wordIndex: item.note.wordIndex,
+                                    word: label(for: item.note.wordIndex),
+                                    initialMarker: item.note.marker ?? "",
+                                    initialText: item.note.noteText
+                                )
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                    
+                    if let editing = editingWord, editing.lineIndex == index {
+                        NewAnnotationEditorBox(lineIndex: index, wordIndex: editing.wordIndex, word: label(for: editing.wordIndex)) {
+                            editingWord = nil
                         }
                     }
-                    .padding(.top, 8)
-                }
-                
-                // 2. NEW ANNOTATION: Appears when a letter is clicked -- its
-                // first annotation, or one more on top of existing ones --
-                // or after tapping "Add annotation" below.
-                if let editing = editingWord, editing.lineIndex == index {
-                    NewAnnotationEditorBox(lineIndex: index, wordIndex: editing.wordIndex, word: label(for: editing.wordIndex)) {
-                        editingWord = nil
-                    }
-                }
 
-                // A line isn't limited to one annotation per letter -- this
-                // opens another editor that isn't pinned to any letter,
-                // using a synthetic negative index so it can't collide with
-                // a real character position (which are always >= 0).
-                Button {
-                    let lowestUsed = lineAnnotations.map { $0.wordIndex }.min() ?? 0
-                    editingWord = (index, min(0, lowestUsed) - 1)
-                } label: {
-                    Label("Add annotation", systemImage: "plus.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button {
+                        let lowestUsed = lineAnnotations.map { $0.wordIndex }.min() ?? 0
+                        editingWord = (index, min(0, lowestUsed) - 1)
+                    } label: {
+                        Label("Add annotation", systemImage: "plus.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 6)
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 6)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
-
-            // RIGHT COLUMN: Per-line Note Text Box
-            VStack(alignment: .leading, spacing: 4) {
-//                Text("Line Note").font(.caption2).foregroundStyle(.secondary)
-                LineNoteEditorBox(lineIndex: index).padding(.top, 40)
-            }
-            .frame(width: 260)
         }
     }
 
-    // A `Button` per letter (hundreds per screen now that annotation is
-    // letter-level) carries focus/hover/accessibility overhead that adds up.
-    // A plain tappable `Text` does the same job for a fraction of the cost.
     @ViewBuilder
     private func letterView(lineIndex: Int, charIndex: Int, char: String, tags: [String]) -> some View {
         HStack(spacing: 0) {
@@ -235,10 +406,7 @@ struct LyricsNoteEditorView: View {
         .fixedSize()
         .contentShape(Rectangle())
         .onTapGesture {
-            // A letter can carry more than one annotation, so this always
-            // opens (or, if already open on this exact letter, closes)
-            // another "new annotation" editor -- it never refuses just
-            // because the letter already has one.
+            guard enableAnnotationEdits else { return }
             if editingWord?.lineIndex == lineIndex && editingWord?.wordIndex == charIndex {
                 editingWord = nil
             } else {
@@ -248,19 +416,11 @@ struct LyricsNoteEditorView: View {
     }
 }
 
-/// A single annotatable unit for the letter-level annotation UI: `id` is
-/// that character's index within the *full* line string, so it stays a
-/// stable, unique key even though letters are grouped visually by word.
-/// Not `private` -- `LyricLineView` in MusicExplorerApp.swift uses the same
-/// grouping so its inline superscripts line up with what you tagged here.
 struct LyricLetter: Identifiable {
     let id: Int
     let char: Character
 }
 
-/// Splits `text` into per-word groups of `LyricLetter`s (spaces separate
-/// groups but aren't themselves annotatable) while preserving each letter's
-/// global character index.
 func lyricLetterGroups(for text: String) -> [[LyricLetter]] {
     var groups: [[LyricLetter]] = []
     var current: [LyricLetter] = []
@@ -275,14 +435,6 @@ func lyricLetterGroups(for text: String) -> [[LyricLetter]] {
     return groups
 }
 
-/// Wrapping container for word groups (and, elsewhere, annotation-marker
-/// rows). Replaces the old `WrapHStack`/`FlexibleView`, which measured every
-/// item through a `GeometryReader` plus O(n) `alignmentGuide` callbacks --
-/// fine for a handful of words, but once annotations went letter-level
-/// (hundreds of tap targets per screen) that approach was doing real,
-/// visible work on every layout pass and was a chunk of the lag. SwiftUI's
-/// `Layout` protocol does the same wrapping in one measurement pass with no
-/// extra state or reflow, and needs no GeometryReader at all.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
     var lineSpacing: CGFloat = 8
@@ -341,7 +493,6 @@ struct LineNoteEditorBox: View {
     
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            // Custom designed, true multi-line editor
             TextEditor(text: $draftText)
                 .font(.body)
                 .frame(minHeight: 80)
@@ -356,7 +507,6 @@ struct LineNoteEditorBox: View {
                     isEditing = true
                 }
             
-            // Save button only appears if there are unsaved changes
             if isEditing && draftText != (appState.lineNotes[lineIndex] ?? "") {
                 Button("Save") {
                     appState.lineNotes[lineIndex] = draftText
@@ -372,7 +522,7 @@ struct LineNoteEditorBox: View {
             isEditing = false
         }
         .onChange(of: appState.lineNotes[lineIndex]) { newVal in
-            if !isEditing { // Prevents overwriting what you are currently typing
+            if !isEditing {
                 draftText = newVal ?? ""
             }
         }
@@ -409,7 +559,6 @@ struct AnnotationEditorBox: View {
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
-//                    .buttonStyle(.borderedProminent).controlSize(.small)
                 }
                 Button {
                     if let id {
@@ -433,7 +582,6 @@ struct AnnotationEditorBox: View {
         .padding(10)
         .background(Color(NSColor.windowBackgroundColor))
         .cornerRadius(8)
-//        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.3), lineWidth: 1))
         .onAppear {
             marker = initialMarker
             text = initialText
@@ -469,7 +617,6 @@ struct NewAnnotationEditorBox: View {
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
-//                .buttonStyle(.borderedProminent).controlSize(.small)
                 
                 Button(action: onClose){
                     Image(systemName: "trash")
@@ -488,7 +635,6 @@ struct NewAnnotationEditorBox: View {
         .padding(10)
         .background(Color(NSColor.windowBackgroundColor))
         .cornerRadius(8)
-//        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.blue.opacity(0.4), lineWidth: 1))
         .padding(.top, 8)
     }
 }

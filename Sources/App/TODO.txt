@@ -9,6 +9,14 @@ Future direction:
         - Is this best reactivity for clicking(changing) lyrics? Must consider your idea first, and idk this would work but try using this https://github.com/ungive/mediaremote-adapter.
 ***
 
+9/8/2026
+1. Note editor bug: changes for deleting is not applied, instead saves another copy of the same note resulting in multiple duplicates of annotation and line notes.
+- paritial fix in in-app text editor
+2. Clicking single line mode(or potentially others) deletes saved lyrics. direct compare with original version can be good.
+[3.] smoother main view.
+3-1. hover effects
+
+
 9/7/2026
 
 [1.] Try developing prototype. - Important as it addresses performances as well

@@ -237,7 +237,7 @@ struct ContentView: View {
 
                     if activePanels.contains(.notes) {
                         LyricsNoteEditorView()
-                            .frame(minWidth: 340, idealWidth: geometry.size.width * 0.4, maxWidth: secondaryMaxWidth)
+                            .frame(minWidth: 320, idealWidth: geometry.size.width * 0.4, maxWidth: secondaryMaxWidth)
                     }
 
                 }
@@ -316,6 +316,24 @@ struct LyricLineView: View {
         showAnnotations && lineNote != nil && !lineNote!.isEmpty
     }
 
+    // Anchor for the current/non-current scale animation, matched to the
+    // chosen text alignment so lines scale from the edge they're pinned to
+    // rather than visibly shifting sideways.
+    private var scaleAnchor: UnitPoint {
+        switch align {
+        case .left: return .leading
+        case .right: return .trailing
+        case .center: return .center
+        }
+    }
+
+    // Non-current lines are slightly smaller. Using a constant font size +
+    // scaleEffect (instead of literally changing the font size/weight)
+    // keeps each row's layout height constant, so the ScrollView doesn't
+    // have to reflow mid-scroll -- that reflow was what made the jump
+    // between lines look janky. Scale is fully animatable; Font is not.
+    private let inactiveScale: CGFloat = 0.82
+
     var body: some View {
         ViewThatFits(in: .horizontal) {
             
@@ -347,8 +365,6 @@ struct LyricLineView: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 16)
         .contentShape(Rectangle())
-        .background(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-        .cornerRadius(8)
         .onHover { hovering in
             isHovered = hovering
         }
@@ -362,8 +378,9 @@ struct LyricLineView: View {
         VStack(spacing: 6) {
             if originalText.isEmpty {
                 Text("♪")
-                    .font(.system(size: isCurrent ? lyricSize : lyricSize - 4, weight: isCurrent ? .bold : .medium))
+                    .font(.system(size: lyricSize, weight: .bold))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
+                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             } else if showAnnotations && !annotations.isEmpty {
                 let groups = lyricLetterGroups(for: originalText)
                 HStack(spacing: 4) {
@@ -383,21 +400,24 @@ struct LyricLineView: View {
                         }
                     }
                 }
-                .font(.system(size: isCurrent ? lyricSize : lyricSize - 4, weight: isCurrent ? .bold : .medium))
+                .font(.system(size: lyricSize, weight: .bold))
                 .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                 .underline(isHovered)
+                .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             } else {
                 Text(originalText)
-                    .font(.system(size: isCurrent ? lyricSize : lyricSize - 4, weight: isCurrent ? .bold : .medium))
+                    .font(.system(size: lyricSize, weight: .bold))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                     .underline(isHovered)
+                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             }
 
             if showTranslation, let trans = translationText, !trans.isEmpty {
                 Text(trans)
-                    .font(.system(size: isCurrent ? transSize : transSize - 4, weight: .medium))
+                    .font(.system(size: transSize, weight: .medium))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                     .underline(isHovered)
+                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             }
 
             if showAnnotations && !displayNotes.isEmpty {
@@ -517,7 +537,7 @@ struct LyricsMainView: View {
             .id(appState.trackTitle)
             .onChange(of: appState.currentLineIndex) { newIndex in
                 guard let idx = newIndex else { return }
-                withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
                     proxy.scrollTo(idx, anchor: .center)
                 }
             }
@@ -554,7 +574,7 @@ struct LyricsMainView: View {
                 appState.positionMs = ms
                 appState.services.seek(to: ms)
             }
-            .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isCurrent)
+            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: isCurrent)
             .id(index)
         }
     }

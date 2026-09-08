@@ -18,6 +18,8 @@ struct SongInfoEditorView: View {
     @State private var onlineFailed = false
     @State private var saveError: String? = nil
     @State private var webViewBox = WebViewBox()
+    @State private var isSavingYorushikaPages = false
+    @State private var yorushikaSaveStatus: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,9 +44,21 @@ struct SongInfoEditorView: View {
         .alert(
             "Couldn't save offline copy",
             isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })
-        ) {
+        )
+        {
             Button("OK", role: .cancel) { saveError = nil }
         } message: { Text(saveError ?? "") }
+//        .alert(
+//            "Yorushika pages",
+//            isPresented: Binding(
+//                get: { yorushikaSaveStatus != nil },
+//                set: { if !$0 { yorushikaSaveStatus = nil } }
+//            )
+//        ) {
+//            Button("OK", role: .cancel) { yorushikaSaveStatus = nil }
+//        } message: {
+//            Text(yorushikaSaveStatus ?? "")
+//        }
         .onAppear { sourceDraft = appState.songInfoSource ?? "" }
         .onChange(of: appState.songInfoSource) { newValue in
             onlineFailed = false
@@ -82,6 +96,17 @@ struct SongInfoEditorView: View {
                     }
                     .disabled(isSavingOfflineCopy)
                 }
+//                Button {
+//                    Task { await saveAllYorushikaPages() }
+//                } label: {
+//                    if isSavingYorushikaPages {
+//                        ProgressView().controlSize(.small)
+//                    } else {
+//                        Label("Save Yorushika Pages", systemImage: "arrow.down.doc")
+//                    }
+//                }
+//                .disabled(isSavingYorushikaPages)
+
                 Button("Edit HTML") {
                     draftText = appState.songInfoText ?? ""
                     isEditing = true
@@ -212,6 +237,259 @@ struct SongInfoEditorView: View {
         }
     }
 
+    // MARK: - One-time Yorushika page saving
+
+    private struct YorushikaPage {
+        let category: String
+        let title: String
+        let url: URL
+        let fileName: String
+    }
+
+    /// These are the Namuwiki pages extracted from the supplied Yorushika article.
+    /// Each URL is loaded through WebKit and saved as a .webarchive so the saved
+    /// page can be reopened with the same HTMLWebView offline mechanism used below.
+    private let yorushikaPages: [YorushikaPage] = []
+
+    private func saveAllYorushikaPages() async {
+        guard !isSavingYorushikaPages else { return }
+
+        isSavingYorushikaPages = true
+        defer { isSavingYorushikaPages = false }
+
+        do {
+            // Songs deliberately live directly under MusicExplorer, because the
+            // app's song records are independent of the Yorushika artist folder.
+            // Biography/album/single pages stay grouped under MusicExplorer/Yorushika.
+            let musicExplorerRoot = try Self.musicExplorerRootURL()
+            let yorushikaRoot = musicExplorerRoot.appendingPathComponent("Yorushika", isDirectory: true)
+            try FileManager.default.createDirectory(at: musicExplorerRoot, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: yorushikaRoot, withIntermediateDirectories: true)
+
+            var localURLByRemoteURL: [String: URL] = [:]
+            var outputURLByPageTitle: [String: URL] = [:]
+
+            // Decide every destination first so links can be rewritten to the
+            // destination of the target page even when that target is downloaded later.
+            for page in yorushikaPages {
+                let outputURL: URL
+                if page.category == "Song" || page.category == "Single / Other" {
+                    // All song/single pages live directly under MusicExplorer.
+                    outputURL = musicExplorerRoot.appendingPathComponent(page.fileName)
+                } else {
+                    let categoryFolder: URL
+                    switch page.category {
+                    case "Biography":
+                        categoryFolder = yorushikaRoot.appendingPathComponent("Biography", isDirectory: true)
+                    case "Album":
+                        categoryFolder = yorushikaRoot.appendingPathComponent("Albums", isDirectory: true)
+                    default:
+                        categoryFolder = yorushikaRoot.appendingPathComponent("Singles", isDirectory: true)
+                    }
+                    try FileManager.default.createDirectory(at: categoryFolder, withIntermediateDirectories: true)
+                    outputURL = categoryFolder.appendingPathComponent(page.fileName)
+                }
+
+                outputURLByPageTitle[page.title] = outputURL
+                localURLByRemoteURL[Self.canonicalPageKey(page.url)] = outputURL
+            }
+
+            // Rebuild all archives. Known Namuwiki links inside each downloaded
+            // page are changed to file:// links pointing at the corresponding
+            // saved archive. Therefore a click works without an internet connection.
+            var saved = 0
+            var failed: [String] = []
+
+            for page in yorushikaPages {
+                guard let outputURL = outputURLByPageTitle[page.title] else { continue }
+
+                do {
+                    let archive = try await Self.downloadWebArchive(url: page.url)
+                    let patchedArchive = try Self.rewriteSavedPageLinks(
+                        in: archive,
+                        sourceURL: page.url,
+                        localURLByRemoteURL: localURLByRemoteURL
+                    )
+                    try patchedArchive.write(to: outputURL, options: .atomic)
+                    saved += 1
+                } catch {
+                    failed.append("• \(page.title): \(error.localizedDescription)")
+                }
+            }
+
+            let summaryPath = "\(musicExplorerRoot.path)\nSongs/singles: MusicExplorer/*.webarchive\nBiography/albums: MusicExplorer/Yorushika/..."
+            if failed.isEmpty {
+                yorushikaSaveStatus = "Saved \(saved) pages.\n\n\(summaryPath)\n\nKnown page links were rewritten to local archives for offline navigation."
+            } else {
+                yorushikaSaveStatus = "Saved \(saved) of \(yorushikaPages.count) pages.\n\nFailed:\n\(failed.joined(separator: "\n"))\n\n\(summaryPath)"
+            }
+        } catch {
+            yorushikaSaveStatus = "Couldn't save Yorushika pages:\n\n\(error.localizedDescription)"
+        }
+    }
+
+    private static func canonicalPageKey(_ url: URL) -> String {
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.fragment = nil
+        if let normalized = components?.url?.absoluteString {
+            return normalized
+        }
+        components?.fragment = nil
+        return components?.url?.absoluteString ?? url.absoluteString
+    }
+
+    private static func rewriteSavedPageLinks(
+        in archiveData: Data,
+        sourceURL: URL,
+        localURLByRemoteURL: [String: URL]
+    ) throws -> Data {
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        guard var archive = try PropertyListSerialization.propertyList(
+            from: archiveData,
+            options: [],
+            format: &format
+        ) as? [String: Any] else {
+            throw SongInfoAssetSaverError.fetchFailed("Couldn't read the WebArchive property list.")
+        }
+
+        guard var mainResource = archive["WebMainResource"] as? [String: Any],
+              let data = mainResource["WebResourceData"] as? Data,
+              let html = String(data: data, encoding: .utf8) else {
+            return archiveData
+        }
+
+        let rewrittenHTML = rewriteHTMLLinks(
+            html,
+            sourceURL: sourceURL,
+            localURLByRemoteURL: localURLByRemoteURL
+        )
+
+        guard rewrittenHTML != html else {
+            return archiveData
+        }
+
+        mainResource["WebResourceData"] = rewrittenHTML.data(using: .utf8) ?? data
+        archive["WebMainResource"] = mainResource
+
+        return try PropertyListSerialization.data(
+            fromPropertyList: archive,
+            format: format,
+            options: 0
+        )
+    }
+
+    private static func rewriteHTMLLinks(
+        _ html: String,
+        sourceURL: URL,
+        localURLByRemoteURL: [String: URL]
+    ) -> String {
+        // Handle both href="..." and href='...'. We intentionally only
+        // rewrite URLs that resolve to one of the pages we saved. External
+        // links remain external and therefore retain their normal behavior.
+        let patterns = [
+            #"(?i)(href\s*=\s*)(\")([^\"]+)(\")"#,
+            #"(?i)(href\s*=\s*)(\')([^\']+)(\')"#
+        ]
+
+        var result = html
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
+            for match in matches.reversed() {
+                guard match.numberOfRanges == 4,
+                      let valueRange = Range(match.range(at: 3), in: result) else { continue }
+
+                let rawValue = String(result[valueRange])
+                guard !rawValue.isEmpty,
+                      !rawValue.hasPrefix("#"),
+                      !rawValue.lowercased().hasPrefix("javascript:"),
+                      !rawValue.lowercased().hasPrefix("mailto:") else { continue }
+
+                let resolvedURL: URL?
+                if let absolute = URL(string: rawValue), absolute.scheme != nil {
+                    resolvedURL = absolute
+                } else {
+                    resolvedURL = URL(string: rawValue, relativeTo: sourceURL)?.absoluteURL
+                }
+
+                guard let resolvedURL else { continue }
+                let key = canonicalPageKey(resolvedURL)
+                guard let localURL = localURLByRemoteURL[key] else { continue }
+
+                var replacementURL = localURL.absoluteString
+                if let fragment = resolvedURL.fragment, !fragment.isEmpty {
+                    replacementURL += "#\(fragment)"
+                }
+
+                result.replaceSubrange(valueRange, with: replacementURL)
+            }
+        }
+        return result
+    }
+
+    private static func downloadWebArchive(url: URL) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let delegate = OnePageWebArchiveDelegate(url: url) { result in
+                continuation.resume(with: result)
+            }
+            delegate.start()
+        }
+    }
+
+    private final class OnePageWebArchiveDelegate: NSObject, WKNavigationDelegate {
+        let webView: WKWebView
+        let targetURL: URL
+        let completion: (Result<Data, Error>) -> Void
+        private var finished = false
+
+        init(url: URL, completion: @escaping (Result<Data, Error>) -> Void) {
+            self.targetURL = url
+            self.completion = completion
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .default()
+            self.webView = WKWebView(frame: .zero, configuration: configuration)
+            super.init()
+            self.webView.navigationDelegate = self
+        }
+
+        func start() {
+            webView.load(URLRequest(url: targetURL, cachePolicy: .reloadIgnoringLocalCacheData))
+            // Keep this delegate alive until its async navigation/archive work finishes.
+            selfKeepAlive = self
+        }
+
+        private var selfKeepAlive: OnePageWebArchiveDelegate?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // Give scripts/navigation redirects a moment to settle before archiving.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak webView] in
+                guard let self, let webView, !self.finished else { return }
+                self.finished = true
+                webView.createWebArchiveData { [weak self] result in
+                    guard let self else { return }
+                    self.completion(result)
+                    self.selfKeepAlive = nil
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            finish(error)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            finish(error)
+        }
+
+        private func finish(_ error: Error) {
+            guard !finished else { return }
+            finished = true
+            completion(.failure(error))
+            selfKeepAlive = nil
+        }
+    }
+
+
     // MARK: - Offline copy saving
 
     private func saveOfflineCopy() async {
@@ -305,6 +583,12 @@ struct SongInfoEditorView: View {
                 importError = "Couldn't read \(url.lastPathComponent) as text: \(error.localizedDescription)"
             }
         }
+    }
+
+    private static func musicExplorerRootURL() throws -> URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MusicExplorer", isDirectory: true)
     }
 
     private static func folderURL(documentID: String) throws -> URL {
