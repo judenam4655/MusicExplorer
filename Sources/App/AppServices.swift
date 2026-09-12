@@ -13,6 +13,7 @@ final class AppServices {
     let annotationStore: LyricAnnotationStore
     let lyricNoteStore: LyricNoteStore
     let lineNoteStore: LineNoteStore
+//    let artworkStore: ArtworkStore
  
     private(set) var currentTrack: Track?
     private(set) var currentLyricsState: LyricsFetchState = .notFound
@@ -28,6 +29,7 @@ final class AppServices {
         db = SQLiteDB()
         trackStore = TrackStore(db: db)
         customLyricsStore = CustomLyricsStore(db: db)
+//        artworkStore = ArtworkStore(db: db)
         annotationStore = LyricAnnotationStore(db: db)
         lyricNoteStore = LyricNoteStore(db: db)
         lyricsRepo = LyricsRepository(
@@ -64,8 +66,14 @@ final class AppServices {
     }
  
     private func handleTrackChanged(_ track: Track) {
+        let _ = print("trackId: " + track.id)
+        
         currentTrack = track
         trackStore.upsert(track)
+
+        // TEMPORARY -- see AutoOfflineSongInfoSaver.swift. Delete this one
+        // line (and that file) once the backfill is done.
+        AutoOfflineSongInfoSaver.shared.handle(track: track, services: self)
  
         Task {
             let state = await lyricsRepo.lyrics(for: track)
@@ -139,22 +147,6 @@ final class AppServices {
             handleTrackChanged(current)
         }
     }
-    
-//    func saveCustomOriginal(lrcText: String) {
-//        guard let id = currentTrack?.id else { return }
-//        customLyricsStore.saveOriginal(trackId: id, lrcText: lrcText)
-//        if let current = currentTrack {
-//            handleTrackChanged(current)
-//        }
-//    }
-//
-//    func saveCustomTranslation(lrcText: String) {
-//        guard let id = currentTrack?.id else { return }
-//        customLyricsStore.saveTranslation(trackId: id, lrcText: lrcText)
-//        if let current = currentTrack {
-//            handleTrackChanged(current)
-//        }
-//    }
  
     // MARK: - Lyrics notes / annotations
  
@@ -190,4 +182,29 @@ final class AppServices {
         guard let id = currentTrack?.id else { return }
         lyricNoteStore.save(trackId: id, content: text)
     }
+    
+    // MARK: – Artwork
+    
+//    func getArtwork(for trackId: String) -> (data: Data, source: String)? {
+//        artworkStore.getArtwork(trackId: trackId)
+//    }
+
+//    func saveCustomArtwork(imageData: Data) {
+//        guard let id = currentTrack?.id else { return }
+//        artworkStore.saveArtwork(trackId: id, imageData: imageData, source: "manual")
+//    }
+
+//    func saveFetchedArtwork(imageData: Data) {
+//        guard let id = currentTrack?.id else { return }
+//        // Optional: Prevent overwriting a manual image with an auto-fetched one
+//        if let existing = artworkStore.getArtwork(trackId: id), existing.source == "manual" {
+//            return
+//        }
+//        artworkStore.saveArtwork(trackId: id, imageData: imageData, source: "itunes")
+//    }
+
+//    func removeCustomArtwork() {
+//        guard let id = currentTrack?.id else { return }
+//        artworkStore.delete(trackId: id)
+//    }
 }

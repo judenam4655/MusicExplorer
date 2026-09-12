@@ -16,6 +16,7 @@ struct SongInfoEditorView: View {
     @State private var sourceDraft: String = ""
     @State private var isSavingOfflineCopy = false
     @State private var onlineFailed = false
+    @State private var defaultOnlineFailed = false
     @State private var saveError: String? = nil
     @State private var webViewBox = WebViewBox()
     @State private var isSavingYorushikaPages = false
@@ -59,9 +60,10 @@ struct SongInfoEditorView: View {
 //        } message: {
 //            Text(yorushikaSaveStatus ?? "")
 //        }
-        .onAppear { sourceDraft = appState.songInfoSource ?? "" }
+        .onAppear { sourceDraft = appState.songInfoSource ?? ""; defaultOnlineFailed = false }
         .onChange(of: appState.songInfoSource) { newValue in
             onlineFailed = false
+            defaultOnlineFailed = false
             sourceDraft = newValue ?? ""
         }
     }
@@ -166,6 +168,7 @@ struct SongInfoEditorView: View {
                   let folder = try? Self.folderURL(documentID: documentID),
                   FileManager.default.fileExists(atPath: folder.appendingPathComponent("offline.webarchive").path) {
             
+//            let _ = print("else if in SongINfoEditorView")
             // Provide the saved source URL (or a fallback) to mock the live environment
             let originalURL = URL(string: appState.songInfoSource ?? "https://namu.wiki")
             
@@ -175,11 +178,38 @@ struct SongInfoEditorView: View {
             ))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(10)
-        } else {
-            HTMLWebView(source: .remoteURL(defaultURL), onNavigationFailure: { }, webViewBox: webViewBox)
+        } else if !defaultOnlineFailed {
+            // ONLINE (or not-yet-known): try the real default page first, exactly
+            // like the per-song source branch above. A navigation failure flips
+            // defaultOnlineFailed, dropping us into the local-archive branch below
+            // on the next render -- we don't check that archive's existence until
+            // we actually know the live fetch failed.
+            HTMLWebView(source: .remoteURL(defaultURL), onNavigationFailure: { defaultOnlineFailed = true }, webViewBox: webViewBox)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(10)
-//            fallbackTextOrEmpty
+        } else if let rootFolder = try? Self.musicExplorerRootURL(),
+                  FileManager.default.fileExists(atPath: rootFolder.appendingPathComponent("offline.webarchive").path) {
+            // No per-song source/archive, live default fetch just failed, but a
+            // bundled/app-level default archive exists (MusicExplorer/offline.webarchive,
+            // not a per-song subfolder). Use it as the offline fallback.
+            HTMLWebView(source: .localWebArchive(
+                fileURL: rootFolder.appendingPathComponent("offline.webarchive"),
+                originalURL: defaultURL
+            ))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(10)
+        } else {
+            // Live default fetch failed and there's no cached default archive to
+            // fall back to -- nothing more to try, so say so instead of silently
+            // retrying the same doomed live fetch.
+            VStack {
+                Spacer()
+                Image(systemName: "wifi.slash").font(.system(size: 32)).foregroundStyle(.secondary)
+                Text("Couldn't reach the default page, and no offline copy is saved.")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
