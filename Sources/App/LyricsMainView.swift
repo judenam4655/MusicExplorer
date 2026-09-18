@@ -28,7 +28,7 @@ struct LyricsMainView: View {
 
     /// Safe file name derived from artist + title
     private var artworkTrackKey: String {
-//        let raw = "\(appState.artist)-\(appState.album)-\(appState.trackTitle)"
+//        let raw = "\(appState.artist)-\(appState.album)"
         let raw = "\(appState.artist)-\(appState.trackTitle)"
         let allowed = CharacterSet.alphanumerics
         let cleaned = String(raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
