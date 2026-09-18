@@ -18,6 +18,9 @@ final class AppServices {
     private(set) var currentTrack: Track?
     private(set) var currentLyricsState: LyricsFetchState = .notFound
     private(set) var currentLyrics: LyricsResult?
+    
+    private var cachedSyncedTimed: [LRCParser.TimedIndex] = []
+    private var cachedTranslatedTimed: [LRCParser.TimedIndex] = []
  
     /// Fired once per track change, after lyrics/translation/notes are loaded.
     var onCurrentTrackUpdated: ((Track, LyricsFetchState, TranslationDocument?, SongInfoNote?) -> Void)?
@@ -81,13 +84,17 @@ final class AppServices {
                 self.currentLyricsState = state
                 if case .success(let result) = state {
                     self.currentLyrics = result
+                    self.cachedSyncedTimed = LRCParser.timedIndices(for: result.synced ?? [])
+                    self.cachedTranslatedTimed = LRCParser.timedIndices(for: result.translatedSynced ?? [])
                 } else {
                     self.currentLyrics = nil
+                    self.cachedSyncedTimed = []
+                    self.cachedTranslatedTimed = []
                 }
- 
+
                 let translation = self.translationStore.get(trackId: track.id)
                 let note = self.songInfoStore.get(trackId: track.id)
-                let lineNotes = self.lineNoteStore.all(trackId: track.id)
+//                let lineNotes = self.lineNoteStore.all(trackId: track.id)
                 self.onCurrentTrackUpdated?(track, state, translation, note)
             }
         }
@@ -96,13 +103,12 @@ final class AppServices {
     /// Index into currentLyrics.synced for whatever position the caller has
     /// (typically straight from onPositionTick).
     func currentLineIndex(atMs positionMs: Int) -> Int? {
-        guard let synced = currentLyrics?.synced else { return nil }
-        return LRCParser.currentLineIndex(in: synced, atMs: positionMs)
+        LRCParser.currentLineIndex(in: cachedSyncedTimed, atMs: positionMs)
     }
- 
+
     func currentTranslationLine(atMs positionMs: Int) -> String? {
         guard let translated = currentLyrics?.translatedSynced else { return nil }
-        guard let idx = LRCParser.currentLineIndex(in: translated, atMs: positionMs) else { return nil }
+        guard let idx = LRCParser.currentLineIndex(in: cachedTranslatedTimed, atMs: positionMs) else { return nil }
         return translated[idx].text
     }
  
@@ -182,29 +188,4 @@ final class AppServices {
         guard let id = currentTrack?.id else { return }
         lyricNoteStore.save(trackId: id, content: text)
     }
-    
-    // MARK: – Artwork
-    
-//    func getArtwork(for trackId: String) -> (data: Data, source: String)? {
-//        artworkStore.getArtwork(trackId: trackId)
-//    }
-
-//    func saveCustomArtwork(imageData: Data) {
-//        guard let id = currentTrack?.id else { return }
-//        artworkStore.saveArtwork(trackId: id, imageData: imageData, source: "manual")
-//    }
-
-//    func saveFetchedArtwork(imageData: Data) {
-//        guard let id = currentTrack?.id else { return }
-//        // Optional: Prevent overwriting a manual image with an auto-fetched one
-//        if let existing = artworkStore.getArtwork(trackId: id), existing.source == "manual" {
-//            return
-//        }
-//        artworkStore.saveArtwork(trackId: id, imageData: imageData, source: "itunes")
-//    }
-
-//    func removeCustomArtwork() {
-//        guard let id = currentTrack?.id else { return }
-//        artworkStore.delete(trackId: id)
-//    }
 }

@@ -16,9 +16,9 @@ struct LyricLineView: View {
     let isCurrent: Bool
     let action: () -> Void
 
-    @AppStorage("lyricSize") var lyricSize: Double = 26
-    @AppStorage("transSize") var transSize: Double = 16
-    @AppStorage("annotationSize") var annotationSize: Double = 14
+    @AppStorage("lyricSize") var lyricSize: Double = 32
+    @AppStorage("transSize") var transSize: Double = 28
+    @AppStorage("annotationSize") var annotationSize: Double = 24
     @AppStorage("noteSize") var noteSize: Double = 14
     @AppStorage("lyricAlign") var align: TextAlignmentChoice = .center
     @AppStorage("showTranslation") var showTranslation: Bool = true
@@ -54,6 +54,18 @@ struct LyricLineView: View {
     // chosen text alignment so lines scale from the edge they're pinned to
     // rather than visibly shifting sideways.
     private var scaleAnchor: UnitPoint {
+        switch align {
+        case .left: return .leading
+        case .right: return .trailing
+        case .center: return .center
+        }
+    }
+
+    // Horizontal alignment for the VStacks inside mainLyricContent. Without this,
+    // those VStacks default to .center, which centers the translation/annotation
+    // lines relative to the (usually differently-sized) original lyric line instead
+    // of flushing everything to the same left/right edge as the rest of the row.
+    private var contentAlignment: HorizontalAlignment {
         switch align {
         case .left: return .leading
         case .right: return .trailing
@@ -109,12 +121,13 @@ struct LyricLineView: View {
 
     @ViewBuilder
     private var mainLyricContent: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: contentAlignment, spacing: 6) {
             if originalText.isEmpty {
                 Text("♪")
-                    .font(.system(size: lyricSize, weight: .bold))
+                    .font(.system(size: lyricSize, weight: .black))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
-                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
+                    .padding(.bottom, 5)
+//                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             } else if showAnnotations && !annotations.isEmpty {
                 let groups = lyricLetterGroups(for: originalText)
                 HStack(spacing: 4) {
@@ -126,7 +139,7 @@ struct LyricLineView: View {
                                     ForEach(displayNotes.filter { $0.note.wordIndex == letter.id }, id: \.note.id) { item in
                                         Text(item.tag)
                                             .font(.system(size: annotationSize, weight: .bold))
-                                            .baselineOffset(8)
+                                            .baselineOffset(20)
                                             .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                                     }
                                 }
@@ -134,31 +147,34 @@ struct LyricLineView: View {
                         }
                     }
                 }
-                .font(.system(size: lyricSize, weight: .bold))
+                .font(.system(size: lyricSize, weight: .heavy))
                 .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                 .underline(isHovered)
-                .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
+                .padding(.bottom, 8)
+//                .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             } else {
                 Text(originalText)
-                    .font(.system(size: lyricSize, weight: .bold))
+                    .font(.system(size: lyricSize, weight: .heavy))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                     .underline(isHovered)
-                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
+                    .padding(.bottom, 8)
+//                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             }
 
             if showTranslation, let trans = translationText, !trans.isEmpty {
                 Text(trans)
-                    .font(.system(size: transSize, weight: .medium))
+                    .font(.system(size: transSize, weight: .bold))
                     .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                     .underline(isHovered)
-                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
+                    .padding(.bottom, 8)
+//                    .scaleEffect(isCurrent ? 1.0 : inactiveScale, anchor: scaleAnchor)
             }
 
             if showAnnotations && !displayNotes.isEmpty {
-                VStack(spacing: 2) {
+                VStack(alignment: contentAlignment, spacing: 2) {
                     ForEach(displayNotes, id: \.note.id) { item in
                         Text("\(item.tag): \(item.note.noteText)")
-                            .font(.system(size: annotationSize, weight: .bold))
+                            .font(.system(size: annotationSize*0.8, weight: .medium))
                             .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.3))
                             .frame(maxWidth: 350)
                     }

@@ -21,22 +21,30 @@ extension NSColor {
         
         rgbColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
         
-        // 1. Fix Dark Colors: If the color is too close to black, lift the brightness significantly.
+        // If saturation is extremely low, treat it as a grayscale color (black/white/gray)
+        let isGrayscale = saturation < 0.05
+        
+        // 1. Fix Dark Colors
         if brightness < 0.3 {
-            brightness = 0.45 // Minimum brightness floor
+            brightness = 0.35 // Minimum brightness floor
             
-            // If it's dark AND gray (low saturation), inject some color so it doesn't just look muddy gray
-            if saturation < 0.2 {
+            // Only inject color if it already had a hue (prevents black from turning red)
+            if !isGrayscale && saturation < 0.2 {
                 saturation = 0.3
             }
         }
-        // 2. Optional: If the color is extremely bright, you might want to slightly dim it so white text remains readable.
+        // 2. Prevent bright colors from becoming pure white (dims to gray)
         else if brightness > 0.85 {
-            brightness = 0.75
+            brightness = 0.55
         }
         
-        // 3. Boost vibrancy slightly for better background aesthetics
-        saturation = min(saturation + 0.15, 1.0)
+        // 3. Boost vibrancy slightly for better background aesthetics,
+        // BUT only if it actually has a color. Otherwise, keep it strictly gray.
+        if !isGrayscale {
+            saturation = min(saturation + 0.15, 1.0)
+        } else {
+            saturation = 0 // Force it to stay perfectly gray
+        }
         
         return NSColor(deviceHue: hue, saturation: saturation, brightness: brightness, alpha: 1.0)
     }

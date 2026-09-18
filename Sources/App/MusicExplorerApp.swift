@@ -10,33 +10,39 @@ struct MusicExplorerApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .environmentObject(appState.playback)
                 .onAppear { appState.services.start() }
         }
     }
 }
 
-
+final class PlaybackState: ObservableObject {
+    @Published var positionMs: Int = 0
+    @Published var currentLineIndex: Int? = nil
+    @Published var currentTranslationText: String = ""
+}
 
 /// Minimal ObservableObject bridge so SwiftUI can react to AppServices'
 /// closures.
 final class AppState: ObservableObject {
     let services = AppServices()
+    let playback = PlaybackState() // part of optimziation
 
     @Published var syncedLines: [LyricLine]? = nil
-    @Published var currentLineIndex: Int? = nil
+//    @Published var currentLineIndex: Int? = nil
 
     @Published var trackTitle: String = "Nothing playing"
     @Published var artist: String = ""
 
     // Synced state
     @Published var currentLineText: String = "Searching lyrics..."
-    @Published var currentTranslationText: String = ""
+//    @Published var currentTranslationText: String = ""
     @Published var translatedLines: [LyricLine]? = nil
 
     // Plain state fallback
     @Published var plainLyricsText: String? = nil
 
-    @Published var positionMs: Int = 0
+//    @Published var positionMs: Int = 0
 
     // Song info (wiki) + lyrics notes/annotations
     @Published var songInfoText: String? = nil
@@ -48,8 +54,6 @@ final class AppState: ObservableObject {
 
     init() {
         services.onCurrentTrackUpdated = { [weak self] track, fetchState, _, note in
-            let _ = print("trackId: " + track.id)
-            
             DispatchQueue.main.async {
                 self?.trackTitle = track.title
                 self?.artist = track.artist
@@ -66,7 +70,7 @@ final class AppState: ObservableObject {
                     self?.translatedLines = result.translatedSynced
 
                     self?.currentLineText = ""
-                    self?.currentTranslationText = ""
+                    self?.playback.currentTranslationText = ""
                     if result.synced == nil || result.synced!.isEmpty {
                         self?.plainLyricsText = result.plainText
                     } else {
@@ -94,16 +98,16 @@ final class AppState: ObservableObject {
         services.onPositionTick = { [weak self] ms in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.positionMs = ms
+                self.playback.positionMs = ms
 
                 if self.plainLyricsText == nil {
                     let newIndex = self.services.currentLineIndex(atMs: ms)
-                    if self.currentLineIndex != newIndex {
-                        self.currentLineIndex = newIndex
+                    if self.playback.currentLineIndex != newIndex {
+                        self.playback.currentLineIndex = newIndex
                     }
-
-                    if let translation = self.services.currentTranslationLine(atMs: ms) {
-                        self.currentTranslationText = translation
+                    let translation = self.services.currentTranslationLine(atMs: ms) ?? ""
+                    if translation != self.playback.currentTranslationText {
+                        self.playback.currentTranslationText = translation
                     }
                 }
             }

@@ -10,10 +10,12 @@ import CoreImage
 
 struct LyricsMainView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var playback: PlaybackState
     
-    @AppStorage("titleSize") var titleSize: Double = 28
-    @AppStorage("artistSize") var artistSize: Double = 18
+    @AppStorage("titleSize") var titleSize: Double = 40
+    @AppStorage("artistSize") var artistSize: Double = 24
     @AppStorage("lyricAlign") var align: TextAlignmentChoice = .center
+    @AppStorage("lyricsEdgeGap") var edgeGap: Double = 40
 
     // UI States
     @State private var artworkImage: NSImage? = nil
@@ -26,6 +28,7 @@ struct LyricsMainView: View {
 
     /// Safe file name derived from artist + title
     private var artworkTrackKey: String {
+//        let raw = "\(appState.artist)-\(appState.album)-\(appState.trackTitle)"
         let raw = "\(appState.artist)-\(appState.trackTitle)"
         let allowed = CharacterSet.alphanumerics
         let cleaned = String(raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
@@ -70,7 +73,7 @@ struct LyricsMainView: View {
         .background(backgroundWash)
         // Triggers automatically whenever the artist/title changes
         .task(id: artworkTrackKey) {
-//            await loadArtworkForCurrentTrack()
+            await loadArtworkForCurrentTrack()
         }
     }
 
@@ -104,7 +107,7 @@ struct LyricsMainView: View {
         .padding(.top, 24)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, alignment: align == .center ? .center : (align == .left ? .leading : .trailing))
-        .padding(.horizontal, 40)
+        .padding(.horizontal, edgeGap)
     }
 
     private var artworkView: some View {
@@ -160,18 +163,18 @@ struct LyricsMainView: View {
     private func syncedLyricsList(lines: [LyricLine]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: align == .left ? .leading : (align == .right ? .trailing : .center), spacing: 8) {
+                LazyVStack(alignment: align == .left ? .leading : (align == .right ? .trailing : .center), spacing: 8) {
                     Color.clear.frame(height: 40)
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                         lyricRow(index: index, line: line, totalLines: lines.count)
                     }
                     Color.clear.frame(height: 100)
                 }
-                .padding(.horizontal, 40)
+                .padding(.horizontal, edgeGap)
                 .frame(maxWidth: .infinity, alignment: align == .center ? .center : (align == .left ? .leading : .trailing))
             }
             .id(appState.trackTitle)
-            .onChange(of: appState.currentLineIndex) { newIndex in
+            .onChange(of: playback.currentLineIndex) { newIndex in
                 guard let idx = newIndex else { return }
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
                     proxy.scrollTo(idx, anchor: .center)
@@ -185,7 +188,7 @@ struct LyricsMainView: View {
         let cleanText = line.text.trimmingCharacters(in: .whitespaces)
         let isLastBlock = index == totalLines - 1
         let isEndMarker = (cleanText.lowercased() == "(end)") || (isLastBlock && cleanText.isEmpty)
-        let isCurrent = (index == appState.currentLineIndex) && !isEndMarker
+        let isCurrent = (index == playback.currentLineIndex) && !isEndMarker
 
         if isEndMarker {
             Color.clear.frame(height: 1).id(index)
@@ -206,7 +209,7 @@ struct LyricsMainView: View {
                 isCurrent: isCurrent
             ) {
                 guard let ms = line.timeMs else { return }
-                appState.positionMs = ms
+                playback.positionMs = ms
                 appState.services.seek(to: ms)
             }
             .animation(.spring(response: 0.5, dampingFraction: 0.85), value: isCurrent)
@@ -391,7 +394,7 @@ struct LyricsMainView: View {
             alpha: 1.0
         )
         
-        return rawColor.adaptiveBackground()
+        return Color(nsColor: rawColor.adaptiveBackgroundColor())
     }
 
     private struct ITunesSearchResponse: Decodable {
@@ -404,34 +407,37 @@ struct LyricsMainView: View {
 
 // MARK: - Adaptive Background Extension
 
-extension NSColor {
-    /// Mathematically adjusts a color to guarantee it looks good as a background
-    func adaptiveBackground() -> Color {
-        guard let rgb = self.usingColorSpace(.deviceRGB) else { return Color(self) }
-        
-        var h: CGFloat = 0
-        var s: CGFloat = 0
-        var b: CGFloat = 0
-        var a: CGFloat = 0
-        
-        rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-        
-        // 1. Lift dark/muddy colors
-        if b < 0.3 {
-            b = 0.45
-            if s < 0.2 {
-                s = 0.3 // Inject saturation so it isn't just gray
-            }
-        }
-        // 2. Dim overly bright colors
-        else if b > 0.85 {
-            b = 0.75
-        }
-        
-        // 3. Boost vibrancy slightly
-        s = min(s + 0.15, 1.0)
-        
-        let adaptedNSColor = NSColor(deviceHue: h, saturation: s, brightness: b, alpha: 1.0)
-        return Color(nsColor: adaptedNSColor)
-    }
-}
+//extension NSColor {
+//    /// Mathematically adjusts a color to guarantee it looks good as a background
+//    func adaptiveBackground() -> Color {
+//        guard let rgb = self.usingColorSpace(.deviceRGB) else { return Color(self) }
+//
+//        var h: CGFloat = 0
+//        var s: CGFloat = 0
+//        var b: CGFloat = 0
+//        var a: CGFloat = 0
+//
+//        rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+//
+//        // 1. Lift dark/muddy colors
+//        if b < 0.3 {
+//            b = 0.45
+//            if s < 0.2 {
+//                s = 0.3 // Inject saturation so it isn't just gray
+//            }
+//        }
+//        // 2. Dim overly bright colors and prevent white
+//        else if b > 0.85 {
+//            b = 0.75
+//            if s < 0.2 {
+//                s = 0.3 // Inject saturation to prevent pure white/light gray
+//            }
+//        }
+//
+//        // 3. Boost vibrancy slightly
+//        s = min(s + 0.15, 1.0)
+//
+//        let adaptedNSColor = NSColor(deviceHue: h, saturation: s, brightness: b, alpha: 1.0)
+//        return Color(nsColor: adaptedNSColor)
+//    }
+//}

@@ -15,13 +15,14 @@ enum TextAlignmentChoice: String, CaseIterable {
 }
 
 struct SettingsMenu: View {
-    @AppStorage("titleSize") var titleSize: Double = 28
-    @AppStorage("artistSize") var artistSize: Double = 18
-    @AppStorage("lyricSize") var lyricSize: Double = 26
-    @AppStorage("transSize") var transSize: Double = 16
-    @AppStorage("annotationSize") var annotationSize: Double = 14
+    @AppStorage("titleSize") var titleSize: Double = 40
+    @AppStorage("artistSize") var artistSize: Double = 24
+    @AppStorage("lyricSize") var lyricSize: Double = 32
+    @AppStorage("transSize") var transSize: Double = 28
+    @AppStorage("annotationSize") var annotationSize: Double = 20
     @AppStorage("noteSize") var noteSize: Double = 14
     @AppStorage("lyricAlign") var align: TextAlignmentChoice = .center
+    @AppStorage("lyricsEdgeGap") var edgeGap: Double = 40
     
     var body: some View {
         Form {
@@ -30,15 +31,19 @@ struct SettingsMenu: View {
                     Text(choice.rawValue.capitalized).tag(choice)
                 }
             }
-            Slider(value: $titleSize, in: 16...40) { Text("Title Size") }
-            Slider(value: $artistSize, in: 12...30) { Text("Artist Size") }
-            Slider(value: $lyricSize, in: 16...40) { Text("Lyrics Size") }
-            Slider(value: $transSize, in: 10...30) { Text("Translation Size") }
+            Slider(value: $titleSize, in: 16...70) { Text("Title Size") }
+            Slider(value: $artistSize, in: 12...50) { Text("Artist Size") }
+            Slider(value: $lyricSize, in: 16...70) { Text("Lyrics Size") }
+            Slider(value: $transSize, in: 10...50) { Text("Translation Size") }
             
             Divider().padding(.vertical, 4)
             
-            Slider(value: $annotationSize, in: 8...24) { Text("Annotation Size") }
+            Slider(value: $annotationSize, in: 8...40) { Text("Annotation Size") }
             Slider(value: $noteSize, in: 8...24) { Text("Line Note Size") }
+            
+            Divider().padding(.vertical, 4)
+            
+            Slider(value: $edgeGap, in: 0...1000) { Text("Edge Gap") }
         }
         .padding().frame(width: 300)
     }
@@ -72,7 +77,6 @@ struct ContentView: View {
                 SidebarButton(icon: "info.circle", isActive: activePanels.contains(.info)) { toggle(.info) }
                 SidebarButton(icon: "clock", isActive: activePanels.contains(.history)) { toggle(.history) }
                 SidebarButton(icon: "music.quarternote.3", isActive: activePanels.contains(.sync)) { toggle(.sync) }
-                // NEW: opens the lyrics notes/annotation editor page.
                 SidebarButton(icon: "note.text", isActive: activePanels.contains(.notes)) { toggle(.notes) }
                     .help("Lyrics Notes")
 
@@ -83,8 +87,6 @@ struct ContentView: View {
                 }
                 .help("Toggle Translations")
 
-                // NEW: display toggle (not a page button) -- shows/hides
-                // annotation superscripts + footnotes in the main lyrics view.
                 SidebarButton(icon: "textformat.superscript", isActive: showAnnotations) {
                     showAnnotations.toggle()
                 }
@@ -99,12 +101,6 @@ struct ContentView: View {
 
             // 2. RESIZABLE PANELS WITH GEOMETRY RATIOS
             GeometryReader { geometry in
-                // The 60%-width cap on secondary panels exists so they don't
-                // crowd out the Lyrics panel when both are open. If Lyrics
-                // isn't open, nothing needs that headroom -- capping anyway
-                // left a blank strip on the right when e.g. Song Info was
-                // the only panel open. Only cap when Lyrics is actually
-                // sharing the window.
                 let secondaryMaxWidth: CGFloat = activePanels.contains(.lyrics) ? geometry.size.width * 0.6 : .infinity
 
                 HSplitView {

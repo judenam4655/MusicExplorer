@@ -291,7 +291,7 @@ struct CustomSyncView: View {
         } else {
             let currentBlocks = blocks
             guard syncBlockIndex < currentBlocks.count else { return }
-            let ms = appState.positionMs
+            let ms = appState.playback.positionMs
             rawText = RawLyricsParser.applyingTimestamp(ms, atLineIndex: currentBlocks[syncBlockIndex].firstLineIndex, to: rawText)
             syncBlockIndex += 1
         }
