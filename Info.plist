@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Montserrat-VariableFont_wght.ttf</string>
+		<string>Montserrat-Italic-VariableFont_wght.ttf</string>
+	</array>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>MusicExplorer needs to read the currently playing track from Spotify to sync lyrics.</string>
 </dict>
