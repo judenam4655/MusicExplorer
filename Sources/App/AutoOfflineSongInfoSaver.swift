@@ -1,3 +1,32 @@
+//
+//  AutoOfflineSongInfoSaver.swift
+//  MusicExplorer
+//
+//  Created by Juhyeon Nam on 9/12/26.
+//
+
+import Foundation
+import WebKit
+
+// MARK: - TEMPORARY FEATURE — safe to delete wholesale later
+//
+// Auto-backfills offline song-info copies for a known batch of songs the
+// first time each one is actually played, using a title -> markdown-link
+// lookup table you provide. Once you've played through everything you care
+// about, delete this file and the one call site in AppServices.swift
+// (search for "AutoOfflineSongInfoSaver") and you're fully back to normal.
+//
+// Runs the same "load in an offscreen WKWebView, wait for it to settle, save
+// as .webarchive" pipeline as the manual "Save Offline Copy" button in
+// SongInfoEditorView, just triggered automatically instead of by a click.
+
+final class AutoOfflineSongInfoSaver {
+    static let shared = AutoOfflineSongInfoSaver()
+    private init() {}
+
+    /// title -> markdown-style link string, e.g.
+    /// "[https://namu.wiki/](https://namu.wiki/w/...(...))". Set this once
+    /// at startup, e.g. `AutoOfflineSongInfoSaver.shared.songLinks = songLinks`.
     var songLinks: [String: String] = [
         "カトレア": "https://namu.wiki/w/%EC%B9%B4%ED%8B%80%EB%A0%88%EC%95%BC(%EC%9A%94%EB%A3%A8%EC%8B%9C%EC%B9%B4)",
         "言って。": "https://namu.wiki/w/%EB%A7%90%ED%95%B4%EC%A4%98.(%EC%9A%94%EB%A3%A8%EC%8B%9C%EC%B9%B4)",
@@ -93,3 +122,166 @@
         "憂、燦々": "https://namu.wiki/w/%EC%9A%B0%2C%20%EC%82%B0%EC%82%B0",
         "DARMA GRAND PRIX": "https://namu.wiki/w/DARMA%20GRAND%20PRIX"
     ]
+
+
+    /// Tracks which trackIds we've already tried this app run, so replaying
+    /// the same song doesn't repeat the work (and doesn't repeatedly hit the
+    /// disk/DB check either) even before a save has actually succeeded.
+    private var attemptedTrackIDs = Set<String>()
+
+    /// Call this from AppServices whenever the current track changes.
+    /// Everything here is cheap-and-bail-early except the one branch that
+    /// actually does a save, so it's safe to call unconditionally per track
+    /// change (this is still the part you're deleting later, per your note
+    /// about it costing performance to keep running after the backfill is done).
+    func handle(track: Track, services: AppServices) {
+        // TODO: verify `track.title` is the actual property name on your
+        // Track type — I don't have Track.swift, so this is a guess. If the
+        // real property is e.g. `track.name`, this is the only line to fix.
+        let title = track.title
+
+        guard !attemptedTrackIDs.contains(track.id) else { return }
+        guard let rawLink = songLinks[title], let url = Self.extractURL(from: rawLink) else { return }
+        attemptedTrackIDs.insert(track.id)
+
+        // Already has a saved source/offline copy for this track? Nothing to do.
+        if services.songInfoStore.get(trackId: track.id) != nil { return }
+
+        Task {
+            do {
+                let archiveData = try await Self.downloadWebArchive(url: url)
+                let documentID = UUID().uuidString
+                let folder = try Self.folderURL(documentID: documentID)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let fileURL = folder.appendingPathComponent("offline.webarchive")
+                try archiveData.write(to: fileURL, options: .atomic)
+
+                await MainActor.run {
+                    services.songInfoStore.save(
+                        trackId: track.id,
+                        source: url.absoluteString,
+                        content: "[WebArchive]",
+                        documentID: documentID
+                    )
+                }
+                print("[AutoOfflineSongInfoSaver] saved offline copy for \(title)")
+            } catch {
+                // Deliberately not retried this run -- attemptedTrackIDs already
+                // marked it, so a flaky network hiccup just means "no offline
+                // copy for this one today" rather than hammering it on every replay.
+                print("[AutoOfflineSongInfoSaver] failed for \(title): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Link parsing
+
+    /// Pulls the URL out of a "[label](url)" markdown link, matching
+    /// balanced parens rather than stopping at the first ")" -- needed
+    /// because the sample data has literal, unescaped parens *inside* the
+    /// URL itself (e.g. ".../%EC%B9%B4...(%EC%9A%94...)"). Falls back to
+    /// treating the whole string as a bare URL if it isn't markdown-link shaped.
+    private static func extractURL(from raw: String) -> URL? {
+        guard let markerRange = raw.range(of: "](") else {
+            return URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        var depth = 1
+        var idx = markerRange.upperBound
+        let start = idx
+        while idx < raw.endIndex {
+            let ch = raw[idx]
+            if ch == "(" { depth += 1 }
+            else if ch == ")" {
+                depth -= 1
+                if depth == 0 { break }
+            }
+            idx = raw.index(after: idx)
+        }
+        guard idx < raw.endIndex else { return nil }
+        return URL(string: String(raw[start..<idx]))
+    }
+
+    // MARK: - Paths (mirrors SongInfoEditorView.folderURL)
+
+    private static func folderURL(documentID: String) throws -> URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MusicExplorer", isDirectory: true)
+            .appendingPathComponent(documentID, isDirectory: true)
+    }
+
+    // MARK: - Offscreen archive download (mirrors SongInfoEditorView's private helper)
+
+    private static func downloadWebArchive(url: URL) async throws -> Data {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            // WKWebView/WKWebViewConfiguration must be created on the main
+            // thread -- the enclosing `Task { ... }` in handle(track:services:)
+            // does NOT guarantee that, so without this hop, constructing
+            // OnePageWebArchiveDelegate off-main trips WebKit's internal
+            // main-thread assertion (surfaces as EXC_BREAKPOINT).
+            Task { @MainActor in
+                let delegate = OnePageWebArchiveDelegate(url: url) { result in
+                    continuation.resume(with: result)
+                }
+                delegate.start()
+            }
+        }
+    }
+
+    @MainActor
+    private final class OnePageWebArchiveDelegate: NSObject, WKNavigationDelegate {
+        let webView: WKWebView
+        let targetURL: URL
+        let completion: (Result<Data, Error>) -> Void
+        private var finished = false
+
+        init(url: URL, completion: @escaping (Result<Data, Error>) -> Void) {
+            self.targetURL = url
+            self.completion = completion
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .default()
+            // Same Safe Browsing caveat as HTMLWebView: without this, a
+            // provisional navigation to a real https URL can eat a live
+            // network round-trip against Apple's servers before your own
+            // request even goes out.
+            configuration.preferences.setValue(false, forKey: "safeBrowsingEnabled")
+            self.webView = WKWebView(frame: .zero, configuration: configuration)
+            super.init()
+            self.webView.navigationDelegate = self
+        }
+
+        func start() {
+            webView.load(URLRequest(url: targetURL, cachePolicy: .reloadIgnoringLocalCacheData))
+            selfKeepAlive = self
+        }
+
+        private var selfKeepAlive: OnePageWebArchiveDelegate?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak webView] in
+                guard let self, let webView, !self.finished else { return }
+                self.finished = true
+                webView.createWebArchiveData { [weak self] result in
+                    guard let self else { return }
+                    self.completion(result)
+                    self.selfKeepAlive = nil
+                }
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            finish(error)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            finish(error)
+        }
+
+        private func finish(_ error: Error) {
+            guard !finished else { return }
+            finished = true
+            completion(.failure(error))
+            selfKeepAlive = nil
+        }
+    }
+}

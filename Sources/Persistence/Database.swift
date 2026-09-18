@@ -112,6 +112,17 @@ final class SQLiteDB {
             );
             """, []
         )
+        
+        run(
+            """
+            CREATE TABLE IF NOT EXISTS track_artwork (
+                track_id TEXT PRIMARY KEY REFERENCES tracks(id),
+                image_data BLOB,
+                source TEXT,
+                updated_at INTEGER
+            );
+            """, []
+        )
     }
 
     @discardableResult
@@ -172,6 +183,10 @@ final class SQLiteDB {
                 sqlite3_bind_int64(stmt, idx, v)
             case let v as Double:
                 sqlite3_bind_double(stmt, idx, v)
+            case let v as Data:
+                v.withUnsafeBytes { buffer in
+                    sqlite3_bind_blob(stmt, idx, buffer.baseAddress, Int32(buffer.count), SQLITE_TRANSIENT)
+                }
             case nil:
                 sqlite3_bind_null(stmt, idx)
             default:
@@ -193,5 +208,11 @@ final class SQLiteDB {
 
     static func columnInt(_ stmt: OpaquePointer, _ index: Int32) -> Int {
         Int(sqlite3_column_int64(stmt, index))
+    }
+    
+    static func columnData(_ stmt: OpaquePointer, _ index: Int32) -> Data? {
+        guard let blob = sqlite3_column_blob(stmt, index) else { return nil }
+        let bytes = sqlite3_column_bytes(stmt, index)
+        return Data(bytes: blob, count: Int(bytes))
     }
 }

@@ -9,6 +9,23 @@ Future direction:
         - Is this best reactivity for clicking(changing) lyrics? Must consider your idea first, and idk this would work but try using this https://github.com/ungive/mediaremote-adapter.
 ***
 
+9/12/2026
+1. Artwork: background color for shades of white needs to be adjusted as it conflicts with main lyric view, making lyrics not visible. Spotify fixes by rgb(53, 53, 53).(done)
+3. Main lyric view fixes and bug:
+    3-1. Bug: During, Left or right alignment of lyrics: translation lyric only align based on original lyrics length, not globally aligned each other. Also Artist's name is aligned in the center based on title's length, but should be aligned to left or right on changes.
+    3-2. Add variables in the menu for custom gap between left most window edge to lyrics.
+4. Improvement on scrolling lyrics more smoothly(too laggy).
+    4-1. If there is no more improvement left, what structure or feature distracts and how can they be fixed(no need full version, but needs general plan)
+    
+
+
+9/8/2026
+1. Note editor bug: changes for deleting is not applied, instead saves another copy of the same note resulting in multiple duplicates of annotation and line notes.
+- paritial fix in in-app text editor
+2. Clicking single line mode(or potentially others) deletes saved lyrics. direct compare with original version can be good.
+[3.] smoother main view.
+3-1. hover effects
+
 9/7/2026
 
 [1.] Try developing prototype. - Important as it addresses performances as well

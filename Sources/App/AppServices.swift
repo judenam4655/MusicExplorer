@@ -13,10 +13,14 @@ final class AppServices {
     let annotationStore: LyricAnnotationStore
     let lyricNoteStore: LyricNoteStore
     let lineNoteStore: LineNoteStore
+//    let artworkStore: ArtworkStore
  
     private(set) var currentTrack: Track?
     private(set) var currentLyricsState: LyricsFetchState = .notFound
     private(set) var currentLyrics: LyricsResult?
+    
+    private var cachedSyncedTimed: [LRCParser.TimedIndex] = []
+    private var cachedTranslatedTimed: [LRCParser.TimedIndex] = []
  
     /// Fired once per track change, after lyrics/translation/notes are loaded.
     var onCurrentTrackUpdated: ((Track, LyricsFetchState, TranslationDocument?, SongInfoNote?) -> Void)?
@@ -28,6 +32,7 @@ final class AppServices {
         db = SQLiteDB()
         trackStore = TrackStore(db: db)
         customLyricsStore = CustomLyricsStore(db: db)
+//        artworkStore = ArtworkStore(db: db)
         annotationStore = LyricAnnotationStore(db: db)
         lyricNoteStore = LyricNoteStore(db: db)
         lyricsRepo = LyricsRepository(
@@ -64,8 +69,14 @@ final class AppServices {
     }
  
     private func handleTrackChanged(_ track: Track) {
+        let _ = print("trackId: " + track.id)
+        
         currentTrack = track
         trackStore.upsert(track)
+
+        // TEMPORARY -- see AutoOfflineSongInfoSaver.swift. Delete this one
+        // line (and that file) once the backfill is done.
+        AutoOfflineSongInfoSaver.shared.handle(track: track, services: self)
  
         Task {
             let state = await lyricsRepo.lyrics(for: track)
@@ -73,13 +84,17 @@ final class AppServices {
                 self.currentLyricsState = state
                 if case .success(let result) = state {
                     self.currentLyrics = result
+                    self.cachedSyncedTimed = LRCParser.timedIndices(for: result.synced ?? [])
+                    self.cachedTranslatedTimed = LRCParser.timedIndices(for: result.translatedSynced ?? [])
                 } else {
                     self.currentLyrics = nil
+                    self.cachedSyncedTimed = []
+                    self.cachedTranslatedTimed = []
                 }
- 
+
                 let translation = self.translationStore.get(trackId: track.id)
                 let note = self.songInfoStore.get(trackId: track.id)
-                let lineNotes = self.lineNoteStore.all(trackId: track.id)
+//                let lineNotes = self.lineNoteStore.all(trackId: track.id)
                 self.onCurrentTrackUpdated?(track, state, translation, note)
             }
         }
@@ -88,13 +103,12 @@ final class AppServices {
     /// Index into currentLyrics.synced for whatever position the caller has
     /// (typically straight from onPositionTick).
     func currentLineIndex(atMs positionMs: Int) -> Int? {
-        guard let synced = currentLyrics?.synced else { return nil }
-        return LRCParser.currentLineIndex(in: synced, atMs: positionMs)
+        LRCParser.currentLineIndex(in: cachedSyncedTimed, atMs: positionMs)
     }
- 
+
     func currentTranslationLine(atMs positionMs: Int) -> String? {
         guard let translated = currentLyrics?.translatedSynced else { return nil }
-        guard let idx = LRCParser.currentLineIndex(in: translated, atMs: positionMs) else { return nil }
+        guard let idx = LRCParser.currentLineIndex(in: cachedTranslatedTimed, atMs: positionMs) else { return nil }
         return translated[idx].text
     }
  
@@ -139,22 +153,6 @@ final class AppServices {
             handleTrackChanged(current)
         }
     }
-    
-//    func saveCustomOriginal(lrcText: String) {
-//        guard let id = currentTrack?.id else { return }
-//        customLyricsStore.saveOriginal(trackId: id, lrcText: lrcText)
-//        if let current = currentTrack {
-//            handleTrackChanged(current)
-//        }
-//    }
-//
-//    func saveCustomTranslation(lrcText: String) {
-//        guard let id = currentTrack?.id else { return }
-//        customLyricsStore.saveTranslation(trackId: id, lrcText: lrcText)
-//        if let current = currentTrack {
-//            handleTrackChanged(current)
-//        }
-//    }
  
     // MARK: - Lyrics notes / annotations
  

@@ -22,14 +22,26 @@ enum Source: Equatable {
 struct HTMLWebView: NSViewRepresentable {
     let source: Source
     var onNavigationFailure: (() -> Void)? = nil
-    var webViewBox: WebViewBox? = nil   // NEW
+    var webViewBox: WebViewBox? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        
-        // KVC keys removed: Apple strictly enforces loadFileURL(_:allowingReadAccessTo:)
-        // to handle local directory permissions now.
-        
+
+        // WebKit runs a background "Safe Browsing" / fraudulent-website check
+        // against Apple's servers for any navigation it believes targets a real
+        // http(s) URL. Loading a .webarchive (mimeType "application/x-webarchive")
+        // still counts, because WebKit derives the frame's effective URL from the
+        // archive's own embedded WebResourceURL (the live URL recorded when the
+        // page was captured) rather than from whatever `baseURL` we pass to
+        // `load()`. Offline, that background lookup can't complete, hangs/retries,
+        // and eventually surfaces as a generic NSURLErrorDomain -1009 on the main
+        // frame's provisional navigation -- even though nothing in *our* content
+        // needed the network. This is a private/undocumented WKPreferences key,
+        // but it's the standard, widely-used workaround; Apple could rename or
+        // remove it in a future OS release, so if it ever silently stops working,
+        // this is the first place to check.
+        config.preferences.setValue(false, forKey: "safeBrowsingEnabled")
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground") // matches app theme
         webView.navigationDelegate = context.coordinator
@@ -41,6 +53,7 @@ struct HTMLWebView: NSViewRepresentable {
         context.coordinator.onNavigationFailure = onNavigationFailure
         guard context.coordinator.lastLoadedSource != source else { return }
         context.coordinator.lastLoadedSource = source
+        context.coordinator.isLocalWebArchive = false
 
         switch source {
             case .htmlString(let html):
@@ -69,16 +82,26 @@ struct HTMLWebView: NSViewRepresentable {
                 }
             case .localWebArchive(let fileURL, let originalURL):
                 context.coordinator.allowJavaScript = true
-                            
+                // Kept as a safety net: cancel any navigation beyond the first one
+                // we issue ourselves (script- or link-triggered), so we never try
+                // to actually chase a live URL while showing this offline fallback.
+                context.coordinator.isLocalWebArchive = true
+                context.coordinator.hasAllowedInitialArchiveLoad = false
+
                 if let archiveData = try? Data(contentsOf: fileURL) {
-                    // 2. Load the raw binary data to bypass the -1009 network validation check
-                    // 3. Pass the originalURL to trick the JS router into rendering the page
+                    // baseURL is the page's original live URL (not fileURL) so that
+                    // any relative resource paths in the archived HTML resolve to
+                    // the same absolute URLs the archive's bundled WebSubresources
+                    // are keyed by. This is safe now that Safe Browsing is disabled
+                    // above -- that was the actual source of the -1009, not this.
                     nsView.load(
                         archiveData,
                         mimeType: "application/x-webarchive",
                         characterEncodingName: "utf-8",
                         baseURL: originalURL ?? fileURL
                     )
+                } else {
+                    onNavigationFailure?()
                 }
         }
     }
@@ -90,6 +113,12 @@ struct HTMLWebView: NSViewRepresentable {
         var lastLoadedSource: Source?
         var allowJavaScript = false
 
+        // Set while a `.localWebArchive` is loading. We still cancel any navigation
+        // beyond the first as a safety net (in case a script tries to navigate the
+        // main frame for any reason) — see decidePolicyFor below.
+        var isLocalWebArchive = false
+        var hasAllowedInitialArchiveLoad = false
+
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
@@ -97,6 +126,19 @@ struct HTMLWebView: NSViewRepresentable {
             decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
         ) {
             preferences.allowsContentJavaScript = allowJavaScript
+
+            if isLocalWebArchive {
+                if hasAllowedInitialArchiveLoad {
+                    // Anything after the one load we issued ourselves would be a
+                    // script- or link-triggered navigation. Cancel it rather than
+                    // letting WebKit try to actually fetch it while we're in this
+                    // offline-fallback path — we stay on the already-rendered archive.
+                    decisionHandler(.cancel, preferences)
+                    return
+                }
+                hasAllowedInitialArchiveLoad = true
+            }
+
             decisionHandler(.allow, preferences)
         }
 
@@ -142,4 +184,3 @@ struct HTMLWebView: NSViewRepresentable {
         return result
     }
 }
-
